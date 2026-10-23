@@ -1,0 +1,13 @@
+# Models every workstream can name (merged into every config as `models` / `embedders`). Snapshots are pinned to the
+# local copies in site.hf_home (compute nodes are offline; `alexandria fetch-models` downloads on the login node).
+models:
+  qwen2.5-1.5b:  {hf: Qwen/Qwen2.5-1.5B-Instruct,         revision: 989aa7980e4cf806f80c7fef2b1adb7bc71aa306, family: qwen,    size_b: 1.5, max_model_len: 32768}
+  qwen2.5-7b:    {hf: Qwen/Qwen2.5-7B-Instruct,           revision: a09a35458c702b33eeacc393d103063234e8bc28, family: qwen,    size_b: 7.6, max_model_len: 32768}
+  qwen3-8b:      {hf: Qwen/Qwen3-8B,                      revision: b968826d9c46dd6066d109eabc6255188de91218, family: qwen3,   size_b: 8.2, max_model_len: 40960,
+                  chat_kwargs: {enable_thinking: false}}
+  olmo3-7b:      {hf: allenai/Olmo-3-7B-Instruct,         revision: 6e5971d9eba42665f5bd5a0fcf047f299ce1dccc, family: olmo,    size_b: 7.3, max_model_len: 32768, open_data: true}
+  granite3.3-8b: {hf: ibm-granite/granite-3.3-8b-instruct, revision: 51dd4bc2ade4059a6bd87649d68aa11e4fb2529b, family: granite, size_b: 8.2, max_model_len: 32768}
+  phi4-mini:     {hf: microsoft/Phi-4-mini-instruct,      revision: cfbefacb99257ffa30c83adab238a50856ac3083, family: phi,     size_b: 3.8, max_model_len: 32768}
+
+embedders:
+  bge-m3: {hf: BAAI/bge-m3, revision: 5617a9f61b028005a4858fdac845db406aefb181, pooling: cls, max_length: 1024, batch_size: 64}

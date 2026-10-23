@@ -1,0 +1,53 @@
+# WS2: representation comparison on the QA bench (model alone vs full paper vs 22M summary vs KUs).
+# Merged with site.yaml, models.yaml and the dataset file. Override on the command line:
+#   alexandria ws2 answer --profile debug --set 'ws2.answer.models=[qwen2.5-7b]'
+
+profiles:
+  debug: {ws2_papers: 100}               # the 100-paper test
+  full: {}
+
+ws2:
+  papers:
+    n: 1000                               # full profile
+    seed: 0
+    strata: [domain]
+    input_types: [full_text]              # summaries written from full text (abstract-only ones are WS1's concern)
+    min_source_chars: 5000
+    exclude_ku_regeneration: true         # KU-Fixes needs_regeneration (near-empty KU) -> not eligible
+    exclude_duplicate_copies: true        # KU-Fixes duplicate copies that are not the kept one -> not eligible
+    flagged_share: 0.3                    # over-sample WS1-flagged papers for the before/after-cleaning comparison
+
+  questions:
+    generator: qwen3-8b                   # different family from most answerers (bias note in README)
+    generate_per_paper: 10                # candidates; the rules + critic keep at most per_paper
+    per_paper: 5                          # kept after verification
+    max_source_tokens: 24000
+    max_tokens: 3000
+    temperature: 0.0
+    max_answer_words: 15
+    min_evidence_match: 90                # rapidfuzz partial_ratio of the evidence quote against the source
+    copy_ngram: 8                         # a question copying >= 8 consecutive source words is dropped
+    critic: true                          # LLM critic pass: identifies study, single answer, not trivial, needs paper
+    gpu_memory_utilization: 0.85
+
+  ku: {}                                # one KU per paper = the dataset row's 18-field summary (+ KU-Fixes); no LLM
+
+  contexts:
+    tokenizer: qwen2.5-7b                 # reference tokenizer for token counts
+    full_text_chars: 30000                # full-paper arm: first 30k characters of the source
+    max_context_tokens: 16000             # every context capped here (recorded per context)
+
+  answer:
+    models: [qwen2.5-7b, olmo3-7b, granite3.3-8b, phi4-mini]   # 4 families; Qwen3 is the question generator / judge
+    arms: [closed_book, full_text, full_text_matched, ku_raw, ku_clean]
+    seeds: [0]
+    temperature: 0.0
+    max_tokens: 64
+    gpu_memory_utilization: 0.85
+
+  grade:
+    judge: qwen3-8b
+    gpu_memory_utilization: 0.85
+
+  results:
+    n_boot: 2000

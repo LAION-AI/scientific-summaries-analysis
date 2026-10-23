@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "alexandria-icml-2027"
+version = "0.1.0"
+description = "Alexandria ICML 2027: data-quality audit, description and faithfulness evaluation of laion/Scientific-Summaries"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.26",
+    "pandas>=2.0",
+    "pyarrow>=14",
+    "pyyaml>=6",
+    "pydantic>=2.6",
+    "duckdb>=1.0",
+    "rapidfuzz>=3.6",
+    "datasketch>=1.6",
+    "krippendorff>=0.7",
+    "fasttext-numpy2-wheel>=0.9.2",
+    "matplotlib>=3.7",
+    "scipy>=1.11",
+    "scikit-learn>=1.3",
+]
+
+[project.optional-dependencies]
+# vLLM pins its own torch, so it lives in a separate conda env (Alex-vllm); see README "Environments".
+llm = ["vllm>=0.8.5"]
+dev = ["pytest>=7", "ruff>=0.5"]
+
+[project.scripts]
+alexandria = "alexandria.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+alexandria = ["dashboard/static/*", "dashboard/static/vendor/*.js", "resources/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "data: needs the real Scientific-Summaries files on the cluster (skipped elsewhere)",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM"]
+ignore = ["E501"]

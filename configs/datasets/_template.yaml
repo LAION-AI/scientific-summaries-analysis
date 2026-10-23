@@ -1,0 +1,37 @@
+# Template for a new dataset. Copy to configs/datasets/<name>.yaml (files starting with "_" are ignored), fill in,
+# then:   alexandria datasets                                   # check it is listed
+#         alexandria sample --dataset <name>                    # tiny stratified debug subset
+#         alexandria pipeline ws1 features keys neardup-sign neardup quality describe report --dataset <name>
+#         alexandria dashboard serve --dataset <name>
+# Results go to <out_root>/<name>/<profile>/. Any key of site.yaml / ws1.yaml can be overridden here.
+
+dataset:
+  title: My summaries dataset
+  description: >-
+    One paragraph: what the records are, how the summaries were made, which subsets exist.
+  homepage: null
+  # Canonical column -> the column name in YOUR files, only where they differ. Canonical names:
+  # src/alexandria/resources/canonical_schema.json (paper_id, executive_summary, key_results, claims, text_raw, ...).
+  # Columns you do not have are simply missing: the checks that need them show "n/a" / 0 instead of failing.
+  columns:
+    paper_id: id
+    executive_summary: summary
+    text_sanitized: full_text
+  links:                                  # optional: turn ids into links in tables (dashboard + PDF)
+    - {name: DOI, column: oa_doi, pattern: '^10\..+', url: "https://doi.org/{0}"}
+
+site:
+  data_root: /path/to/my/dataset           # parquet files live under here
+  ku_fixes: null                           # KU-Fixes is specific to Scientific-Summaries
+
+data:
+  sources:                                 # globs relative to data_root; "group" = reporting unit
+    - {group: part-a, glob: "a/*.parquet"}
+    - {group: part-b, glob: "b/*.parquet"}
+  revision: null
+
+ws1:
+  length_spec_words: {}                    # documented per-field length targets, if the dataset publishes any
+  reconcile: {claims: []}                  # published numbers to check; empty -> stage `reconcile` is skipped
+  checks:
+    prompt_overhead_tokens: 0              # prompt tokens in summary_tokens_in that are not paper content

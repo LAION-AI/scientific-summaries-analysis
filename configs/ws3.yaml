@@ -1,0 +1,62 @@
+# WS3: harder benchmarks via the Alexandria knowledge skill (agentic retrieval), arms as in the plan.
+# Merged with site.yaml, models.yaml and the dataset file.
+
+profiles:
+  debug: {ws3_items: 100}                 # the 100-item-per-benchmark test
+  full: {}
+
+ws3:
+  benchmarks:
+    names: [qabench-open, pubmedqa, litqa2, scifact, hle, hle-gold, gpqa]   # unavailable ones are listed, not fatal
+    seed: 0
+    max_items: null                       # full profile: every item
+    link_gold: true                       # link items to their paper in the dataset (DOI / exact title; ws3.gold)
+    min_title_words: 5
+
+  index:
+    embedder: bge-m3
+    max_length: 512
+    k1: 0.9
+    b: 0.4
+    chunk_words: 300
+    chunk_overlap: 50
+    max_words_per_paper: 20000
+    max_papers: null
+    blocklist_arxiv: ["2501.14249", "2311.12022", "2407.10362", "2004.14974", "1909.06146"]  # HLE, GPQA, LAB-Bench, SciFact, PubMedQA
+
+  pilot:
+    per_bench: 20
+    tools: [search, get_paper]
+    gate: 0.95
+    gpu_memory_utilization: 0.85
+
+  agent:
+    models: [qwen2.5-7b, olmo3-7b, granite3.3-8b, phi4-mini]
+    arms: [A0, A0+, R, F, S, S-OA, Oracle, W, W-sch, S+W]   # K dropped 2026-10-22: one KU per paper = S
+    max_tool_calls: 6
+    max_retrieved_tokens: 8000
+    max_step_tokens: 400
+    temperature: 0.0                      # full runs: 0.6 with seeds [0, 1, 2]
+    seeds: [0]
+    dense: true
+    internet: false                       # Grete compute nodes are offline: web arms are reported as not run
+    encoder_device: cpu                   # bge-m3 query encoder on CPU: vLLM gets the whole slice
+    gpu_memory_utilization: 0.88          # OLMo-3-7B (no GQA) needs ~7 GiB KV for 14k tokens on a 20 GB slice
+    arm_defs:
+      A0:     {mode: direct}
+      A0+:    {mode: sc, samples: 5, temperature: 0.7}
+      R:      {mode: rag, kinds: [fulltext, summary], k: 20}
+      F:      {mode: agent, tools: [search_fulltext], view: fulltext}
+      S:      {mode: agent, tools: [search, get_paper], view: summary}
+      S-OA:   {mode: agent, tools: [search, get_paper], view: summary, only_full_text: true}
+      Oracle: {mode: oracle, benchmarks: [qabench-open]}
+      W:      {mode: web, tools: [web_search, fetch]}
+      W-sch:  {mode: web, tools: [web_search, fetch]}
+      S+W:    {mode: web, tools: [search, get_paper, web_search, fetch]}
+
+  grade:
+    judge: qwen3-8b
+    gpu_memory_utilization: 0.85
+
+  results:
+    n_boot: 2000

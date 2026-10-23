@@ -1,0 +1,66 @@
+# Dataset: laion/Scientific-Summaries (arXiv + PubMed subsets on local storage).
+# A dataset file is merged on top of site.yaml + <ws>.yaml, so it can set or override any key there.
+
+dataset:
+  title: laion/Scientific-Summaries
+  description: >-
+    22M scientific papers with an 18-field structured summary written by Gemini 2.0 Flash Lite, plus source text
+    and OpenAlex metadata. Local copy: arxiv/new, arxiv/old, arxiv/titled and pubmed.
+  homepage: https://huggingface.co/datasets/laion/Scientific-Summaries
+  out_subdir: ""                          # results stay at <out_root>/<profile>/ (the layout used before datasets)
+  columns: {}                             # the release already uses the canonical column names
+  links:                                  # first match per rule; every paper shows all rules that match
+    - {name: arXiv,    column: paper_id,    pattern: '^\d{4}\.\d{4,5}(v\d+)?$', url: "https://arxiv.org/abs/{0}"}
+    - {name: arXiv,    column: oa_doi,      pattern: '10\.48550/arxiv\.(.+)$',   url: "https://arxiv.org/abs/{1}"}
+    - {name: PMC,      column: paper_id,    pattern: 'PMC\d+',                   url: "https://pmc.ncbi.nlm.nih.gov/articles/{0}/"}
+    - {name: DOI,      column: oa_doi,      pattern: '^10\..+',                  url: "https://doi.org/{0}"}
+    - {name: DOI,      column: source_doi,  pattern: '^10\..+',                  url: "https://doi.org/{0}"}
+    - {name: OpenAlex, column: openalex_id, pattern: 'W\d+$',                    url: "https://openalex.org/{0}"}
+
+site:
+  data_root: ${store}/Scientific-Summaries                          # holds data/<subset>/*.parquet (the HF repo layout)
+  ku_fixes: ${store}/Scientific-Summaries-KU-Fixes                  # optional extra: fault index, duplicates, key stats
+
+data:
+  # Globs relative to site.data_root. "group" is the reporting unit (subset / sub-collection).
+  sources:
+    - {group: arxiv/new,    glob: data/arxiv/new_*.parquet}
+    - {group: arxiv/old,    glob: data/arxiv/old_*.parquet}
+    - {group: arxiv/titled, glob: data/arxiv/titled_*.parquet}
+    - {group: pubmed,       glob: data/pubmed/part-*.parquet}
+    # Not downloaded locally (see download_arxiv_pubmed.sh); add them here once present:
+    # - {group: bethgelab,  glob: data/bethgelab/*.parquet}
+    # - {group: web-papers, glob: data/web-papers/*.parquet}
+  revision: 232547b7b938a6588ce5d9d7faa96384860b7a16              # laion/Scientific-Summaries revision on disk
+
+ws1:
+  # Length targets DOCUMENTED in the dataset README (field table). The delivered summaries are ~0.4-0.6x these
+  # targets in every field (debug sample: executive_summary median 208 words, max 340, vs 400-500), so a per-paper
+  # "shorter than target" flag fires on ~100% of papers and carries no information. These targets are therefore
+  # only compared with the delivered distribution once, as a dataset-level finding (quality: length_vs_documented).
+  length_spec_words:
+    executive_summary: [400, 500]
+    research_context: [150, 200]
+    research_question_hypothesis: [180, 230]
+    methodological_details: [450, 550]
+    key_results: [450, 550]
+  reconcile:
+    # Upstream statements to reconcile, each with where it is written. Local numbers are measured.
+    claims:
+      - {what: "arXiv papers in the dataset", value: 3322974, source: "Scientific-Summaries README, subset table"}
+      - {what: "papers in the dataset", value: 22087912, source: "Scientific-Summaries README / croissant"}
+      - {what: "FAISS summary vectors", value: 21796509, source: "SEARCH_USAGE.md (per summary field)"}
+      - {what: "BM25 per-field documents", value: 21354265, source: "SEARCH_USAGE.md (per summary field; paper_id_order 21.35M rows)"}
+      - {what: "BM25 chunk documents", value: 60301728, source: "SEARCH_USAGE.md"}
+      - {what: "BM25 claim documents", value: 92084322, source: "SEARCH_USAGE.md"}
+      - {what: "summary fields", value: 18, source: "README ('18-field structured summary')"}
+      - {what: "summary fields indexed", value: 19, source: "SEARCH_USAGE.md ('19 fields total')"}
+      - {what: "columns", value: 44, source: "croissant.json / normalizer"}
+      - {what: "arXiv parquet files", value: 3985, source: "SEARCH_USAGE.md"}
+      - {what: "papers with full text", value: 5318000, source: "README (~5.3M, 24%)"}
+    # External reference, to be checked before citing: total arXiv submissions at the dataset cut-off.
+    arxiv_total_submissions: {value: 2700000, as_of: "2025-02", source: "arxiv.org/stats/monthly_submissions (verify)"}
+  provenance:
+    prompt_file: null                     # path to the exact generation prompt (text/markdown); null = "not published"
+    temperature: null                     # fill in from the generation logs
+    price_per_mtok: {input: 0.075, output: 0.30, source: "Google AI pricing for gemini-2.0-flash-lite (verify date)"}

@@ -1,0 +1,25 @@
+# Site settings (GWDG Grete). Everything machine-specific lives here; every stage reads it.
+# Override any value on the command line:  alexandria ws1 features --set site.store=/other/path
+
+store: /mnt/vast-kisski/projects/kisski-l3s-llm4sci/gollam          # large project storage
+data_root: null                                                     # set by the dataset file (configs/datasets/<name>.yaml)
+default_dataset: scientific-summaries                               # --dataset / $ALEXANDRIA_DATASET choose another
+out_root: ${store}/Alexandria-ICML-2027/runs                        # <out_root>/<dataset>/<profile>/<ws>/<stage>/
+assets: ${store}/Alexandria-ICML-2027/assets                        # fastText lid.176.bin etc.
+hf_home: ${store}/hf_cache                                          # compute nodes have no internet: models are fetched here first
+logs: ${store}/logs
+
+llm:                                                                # global overrides for every vLLM model (recorded in manifests)
+  quantization: null                                                # e.g. fp8: weight-only FP8 so 7-8B models fit 20 GB MIG slices
+  max_model_len: null                                               # cap on every model's context length
+
+envs:
+  main: ${store}/envs/Alex                                          # conda activate Alex
+  llm: ${store}/envs/Alex-vllm                                      # conda activate Alex-vllm (vLLM; judge + MiniCheck)
+
+slurm:
+  account: kisski-l3s-llm4sci
+  # CPU-heavy stages: grete:interactive gives a small MIG slice plus many CPUs and starts within minutes (12 h max).
+  cpu: {partition: "grete:interactive", gres: "gpu:1g.10gb:1", cpus: 32, mem: 128G, time: "06:00:00"}
+  gpu: {partition: "grete:interactive", gres: "gpu:3g.40gb:1", cpus: 16, mem: 120G, time: "12:00:00", debug_time: "03:00:00"}
+  debug: {partition: "grete:interactive", gres: "gpu:1g.10gb:1", cpus: 8, mem: 32G, time: "01:00:00"}

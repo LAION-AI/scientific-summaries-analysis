@@ -1,0 +1,109 @@
+# WS1: data quality and dataset description of a structured-summary dataset (+ WS1b content faithfulness).
+# Every dataset-independent threshold is here; where the data is and everything specific to one dataset is in
+# configs/datasets/<name>.yaml (merged on top of this file, so a dataset may also override any value below). Override on the command line:
+#   alexandria ws1 features --profile debug --set ws1.checks.min_content_support=0.6
+
+profiles:
+  # debug: the `sample` stage copies a tiny stratified subset; every later stage reads only that.
+  debug: {files_per_group: 2, rows_per_file: 60, seed: 0, gpu_papers: 100}   # gpu_papers: cap for GPU stages
+  # full: every shard of every source; map stages split the shards over SLURM array tasks.
+  full: {}
+
+# ------------------------------------------------------------------ WS1 settings
+ws1:
+  # Per-paper length check against the DELIVERED distribution: modified z-score (Iglewicz & Hoaglin 1993) of
+  # log(1 + words) per field, within papers of the same input type. |z| > robust_z flags degenerate (near-empty,
+  # cut-off) or runaway (repetition loop) fields, which downstream WS should filter.
+  length:
+    # narrative fields only: key_figures_tables legitimately varies with how many figures a paper has
+    fields: [executive_summary, research_context, research_question_hypothesis, methodological_details,
+             procedures_architectures, key_results, interpretation_implications, contradictions_limitations,
+             three_takeaways]
+    robust_z: 3.5
+    min_group: 30                         # input types with fewer papers use the whole field as reference
+
+  length_spec_words: {}                 # documented per-field length targets (words), set by the dataset file
+  reconcile: {claims: []}               # published numbers to check against measured ones, set by the dataset file
+  provenance: {prompt_file: null, temperature: null, price_per_mtok: null}
+
+  checks:
+    output_token_cap: 8192                # Gemini 2.0 Flash Lite max output tokens; tokens_out >= cap - margin = capped
+    output_cap_margin: 16
+    input_char_cap: 100000                # text_length is clipped at 100k characters in the release
+    prompt_overhead_tokens: 1950          # estimated by `provenance` (min summary_tokens_in); content = tokens_in - this
+    input_type_tokens:                    # content-token thresholds -> input type (lower bound inclusive)
+      metadata_only: 0
+      abstract_only: 150
+      short_text: 700
+      full_text: 2500
+    min_content_support: 0.3              # < this share of summary content words in a readable source -> wrong-paper
+                                          # suspect (debug sample: correct papers 0.37-1.0, median ~0.75; calibrate on WS1b labels)
+    max_source_garbled: 0.15              # >= this garbled_fraction: source is unreadable PDF extraction (font mojibake)
+    min_title_similarity: 60              # rapidfuzz token_set_ratio (0-100) below this -> title mismatch
+    min_author_overlap: 0.2               # Jaccard of author surnames below this -> author mismatch
+    lang_min_prob: 0.5                    # fastText probability needed to trust a non-English label
+    lang_model: ${site.assets}/lid.176.bin
+    lang_fields: [executive_summary, key_results]
+
+  flagged:
+    max_rows: 500                         # flagged papers listed on the dashboard / PDF (all of them: flagged_papers.csv)
+
+  neardup:
+    field: executive_summary              # which field's text is MinHashed
+    shingle_words: 5
+    num_perm: 128
+    bands: 16                             # 16 x 8 rows -> ~0.7 Jaccard detection threshold
+    jaccard_threshold: 0.8                # candidate pairs are kept when estimated Jaccard >= this
+    max_bucket: 500                       # ignore LSH buckets larger than this (boilerplate)
+
+  lexical:
+    span_lengths: [8, 12, 20]             # report % of summaries with a >= k-token verbatim match to the source
+    fields: [executive_summary, research_context, methodological_details, procedures_architectures,
+             key_results, interpretation_implications, contradictions_limitations, claims]
+    max_source_chars: 100000
+
+  describe:
+    top_fields: 40
+    year_min: 1990
+
+
+# ------------------------------------------------------------------ WS1b: content faithfulness
+ws1b:
+  human:
+    enabled: false                        # 2026-10-21: no annotators yet -> human-sample / human-agreement / calibrate skip
+    n_papers: 500                         # 400-600 in the plan
+    double_annotated_share: 0.2
+    strata: [group, input_type, domain]   # one summarizer model in arxiv/pubmed, so it is not a stratum here
+    fields: [executive_summary, research_question_hypothesis, methodological_details, key_results,
+             interpretation_implications, contradictions_limitations, claims]
+    labels: [supported, unsupported, contradicted]
+    seed: 0
+
+  grounding:                              # MiniCheck (Tang et al., 2024): claim-level grounding against the source
+    model: bespokelabs/Bespoke-MiniCheck-7B
+    # InternLM2-based: its config/tokenizer ship as repo code. Reviewed 2026-10-21 (InternLM2 config + tokenizer,
+    # imports torch/einops/sentencepiece/tokenizers only); trusted ONLY at this pinned snapshot.
+    trust_remote_code: true
+    revision: 1ed7786bcda3fa1dc35f7c4ed9e3f36b785d33b8
+    max_model_len: 32768
+    chunk_reserve_tokens: 300             # as in the reference implementation
+    n_papers: 100                         # full profile (2026-10-21: 100 papers for now); debug: profiles.debug.gpu_papers
+    fields: [executive_summary, methodological_details, key_results, interpretation_implications, claims]
+    max_sentences_per_field: 12
+    gpu_memory_utilization: 0.85
+
+  judge:                                  # LLM judge, same label set as the human protocol
+    model: Qwen/Qwen3-8B
+    max_model_len: 40960
+    enable_thinking: false
+    temperature: 0.0
+    max_source_tokens: 32000
+    max_sentences: 40                     # per section; longer sections are judged on their first 40 sentences
+    tokens_per_sentence: 100              # output budget = 400 + this x sentences; cut-off answers retried at 2x
+    fields: [executive_summary, research_question_hypothesis, methodological_details, key_results,
+             interpretation_implications, contradictions_limitations]
+    n_papers: 100                         # same papers as grounding (same sampler, seed and n)
+    gpu_memory_utilization: 0.85
+
+  abstract_support:
+    fields: [methodological_details, procedures_architectures, key_results]
