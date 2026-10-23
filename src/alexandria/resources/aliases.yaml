@@ -1,0 +1,31 @@
+# Reviewed alias table: variant key -> canonical key (or null = known off-schema key, kept aside, never merged).
+# Keys are compared after canon(): lower-case, letters and digits only ("Hyp_" -> "hyp").
+# Candidates come from `alexandria ws1 keys` (rapidfuzz + prefix rules, written to alias_candidates.csv); a human
+# reviews them and copies the accepted ones here. A wrong entry silently misfiles data, so nothing is auto-accepted.
+#
+# Evidence for the entries below: KU-Fixes json_key_stats.json (all 7,907 shards, 22,089,530 rows).
+
+columns:
+  # No column-name variants exist in the released parquet (all shards carry the 44 canonical names); these cover
+  # variants seen in raw LLM JSON outputs before release, e.g. truncated or abbreviated hypothesis keys.
+  hyp: research_question_hypothesis
+  hypo: research_question_hypothesis
+  hypothesis: research_question_hypothesis
+  hypotheses: research_question_hypothesis
+  researchquestion: research_question_hypothesis
+  researchquestionhypotheses: research_question_hypothesis
+  researchquestionsandhypotheses: research_question_hypothesis
+  methodology: methodological_details
+  methods: methodological_details
+  results: key_results
+  limitations: contradictions_limitations
+  takeaways: three_takeaways
+
+claims:
+  contradictionsevidence: contradicting_evidence     # 1 row
+  contradatingevidence: contradicting_evidence       # 1 row
+  contradevidence: contradicting_evidence            # 1 row
+  contradcontradictingevidence: contradicting_evidence   # 1 row ("contrad contradicting evidence")
+  caveats: null                                      # 443 rows: off-schema extra key, kept in extras
+  caveat: null                                       # 1 row
+  limitations: null                                  # 3 rows

@@ -1,0 +1,180 @@
+{
+ "columns": [
+  {
+   "name": "paper_id",
+   "type": "large_string"
+  },
+  {
+   "name": "subset",
+   "type": "large_string"
+  },
+  {
+   "name": "source_title",
+   "type": "large_string"
+  },
+  {
+   "name": "source_authors",
+   "type": "large_string"
+  },
+  {
+   "name": "source_year",
+   "type": "large_string"
+  },
+  {
+   "name": "source_venue",
+   "type": "large_string"
+  },
+  {
+   "name": "source_doi",
+   "type": "large_string"
+  },
+  {
+   "name": "summary_title",
+   "type": "large_string"
+  },
+  {
+   "name": "summary_authors",
+   "type": "large_string"
+  },
+  {
+   "name": "field_subfield",
+   "type": "large_string"
+  },
+  {
+   "name": "type_of_paper",
+   "type": "large_string"
+  },
+  {
+   "name": "executive_summary",
+   "type": "large_string"
+  },
+  {
+   "name": "research_context",
+   "type": "large_string"
+  },
+  {
+   "name": "research_question_hypothesis",
+   "type": "large_string"
+  },
+  {
+   "name": "methodological_details",
+   "type": "large_string"
+  },
+  {
+   "name": "procedures_architectures",
+   "type": "large_string"
+  },
+  {
+   "name": "key_results",
+   "type": "large_string"
+  },
+  {
+   "name": "interpretation_implications",
+   "type": "large_string"
+  },
+  {
+   "name": "contradictions_limitations",
+   "type": "large_string"
+  },
+  {
+   "name": "claims",
+   "type": "large_string"
+  },
+  {
+   "name": "data_code_availability",
+   "type": "large_string"
+  },
+  {
+   "name": "robustness_ablation_notes",
+   "type": "large_string"
+  },
+  {
+   "name": "ethical_considerations",
+   "type": "large_string"
+  },
+  {
+   "name": "key_figures_tables",
+   "type": "large_string"
+  },
+  {
+   "name": "three_takeaways",
+   "type": "large_string"
+  },
+  {
+   "name": "summary_model",
+   "type": "large_string"
+  },
+  {
+   "name": "summary_tokens_in",
+   "type": "int64"
+  },
+  {
+   "name": "summary_tokens_out",
+   "type": "int64"
+  },
+  {
+   "name": "openalex_id",
+   "type": "large_string"
+  },
+  {
+   "name": "oa_doi",
+   "type": "large_string"
+  },
+  {
+   "name": "oa_title",
+   "type": "large_string"
+  },
+  {
+   "name": "oa_type",
+   "type": "large_string"
+  },
+  {
+   "name": "oa_year",
+   "type": "double"
+  },
+  {
+   "name": "oa_cited_by_count",
+   "type": "double"
+  },
+  {
+   "name": "oa_language",
+   "type": "large_string"
+  },
+  {
+   "name": "oa_is_retracted",
+   "type": "bool"
+  },
+  {
+   "name": "oa_is_open_access",
+   "type": "bool"
+  },
+  {
+   "name": "oa_authorships",
+   "type": "large_string"
+  },
+  {
+   "name": "oa_referenced_works",
+   "type": "large_string"
+  },
+  {
+   "name": "match_method",
+   "type": "large_string"
+  },
+  {
+   "name": "has_openalex_match",
+   "type": "bool"
+  },
+  {
+   "name": "text_length",
+   "type": "int64"
+  },
+  {
+   "name": "text_sanitized",
+   "type": "large_string"
+  },
+  {
+   "name": "text_raw",
+   "type": "large_string"
+  }
+ ]
+}

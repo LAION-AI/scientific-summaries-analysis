@@ -1,0 +1,2 @@
+[console_scripts]
+alexandria = alexandria.cli:main
