@@ -2,7 +2,7 @@
 
 Experiments on structured-summary datasets, by default
 [laion/Scientific-Summaries](https://huggingface.co/datasets/laion/Scientific-Summaries) (revision `232547b7`):
-22.1M papers, each with one **knowledge unit (KU)**, an LLM-written (Gemini 2.0 Flash Lite) 18-field structured
+22.1M papers, each with one **knowledge unit (KU)**, an LLM-written 18-field structured
 summary, plus OpenAlex metadata and, for ~5.3M papers, the full text. One workstream (WS) per sub-package:
 
 | WS | question | package | config |
