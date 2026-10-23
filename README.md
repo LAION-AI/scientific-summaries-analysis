@@ -1,4 +1,4 @@
-# addr2line
+# Scientific Summaries Analysis
 
 [![](https://img.shields.io/crates/v/addr2line.svg)](https://crates.io/crates/addr2line)
 [![](https://img.shields.io/docsrs/addr2line.svg)](https://docs.rs/addr2line)
