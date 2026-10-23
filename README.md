@@ -1,48 +1,337 @@
-# Scientific Summaries Analysis
+# Alexandria ICML 2027
 
+Experiments on structured-summary datasets, by default
+[laion/Scientific-Summaries](https://huggingface.co/datasets/laion/Scientific-Summaries) (revision `232547b7`):
+22.1M papers, each with one **knowledge unit (KU)**, an LLM-written (Gemini 2.0 Flash Lite) 18-field structured
+summary, plus OpenAlex metadata and, for ~5.3M papers, the full text. One workstream (WS) per sub-package:
 
+| WS | question | package | config |
+|---|---|---|---|
+| **WS1** | Is the dataset what it claims to be? Data-quality audit, dataset description, datasheet; **WS1b**: are the KUs faithful to their papers? | `alexandria.ws1` | `configs/ws1.yaml` |
+| **WS2** | Given the paper, how much of what a reader needs does the KU keep, compared with the full text, at what token cost? (fidelity / retention, gold paper given) | `alexandria.ws2` | `configs/ws2.yaml` |
+| **WS3** | Without the paper, does access to the KU corpus through a retrieval skill help models on scientific benchmarks? (usefulness, open corpus) | `alexandria.ws3`, `alexandria.skill` | `configs/ws3.yaml` |
 
-`    scientific summaries analysis` provides a cross-platform library for retrieving per-address debug information
-from files with DWARF debug information. Given an address, it can return the file name,
-line number, and function name associated with that address, as well as the inline call
-stack leading to that address.
+Contents: [Layout](#repository-layout) · [Setup](#setup-once) · [How stages run](#how-stages-run) ·
+[Dashboard](#dashboard) · [WS1](#ws1-data-quality-description-and-faithfulness) · [WS2](#ws2-representation-comparison-on-the-qa-bench) ·
+[WS3](#ws3-benchmarks-via-the-alexandria-knowledge-skill) · [ICML run protocol](#icml-run-protocol-debug--full) ·
+[Threats to validity](#threats-to-validity-and-open-items) · [Datasets](#datasets-run-on-any-data) · [Data notes](#data-notes)
 
-The crate has a CLI wrapper around the library which provides some of
-the functionality of the `    scientific summaries analysis` command line tool distributed with
-[GNU binutils](https://sourceware.org/binutils/docs/binutils/    scientific summaries analysis.html).
+## Repository layout
 
-# Quickstart
- - Add the [`    scientific summaries analysis` crate](https://crates.io/crates/    scientific summaries analysis) to your `Cargo.toml`.
- - Call [`    scientific summaries analysis::Loader::new`](https://docs.rs/    scientific summaries analysis/*/    scientific summaries analysis/struct.Loader.html#method.new) with the file path.
- - Use [`    scientific summaries analysis::Loader::find_location`](https://docs.rs/    scientific summaries analysis/*/    scientific summaries analysis/struct.Loader.html#method.find_location)
-   or [`    scientific summaries analysis::Loader::find_frames`](https://docs.rs/    scientific summaries analysis/*/    scientific summaries analysis/struct.Loader.html#method.find_frames)
-   to look up debug information for an address.
+```
+configs/
+  site.yaml              machine paths, SLURM resources, global vLLM overrides (site.llm.*)
+  models.yaml            every LLM / embedder by name, pinned HF revision, family, size
+  datasets/<name>.yaml   where a dataset lives, column mapping, link rules, extras (KU-Fixes)
+  ws1.yaml ws2.yaml ws3.yaml   every threshold / setting of a workstream; `profiles:` = debug vs full
+src/alexandria/
+  cli.py slurm.py runtime.py config.py data.py   stage registry, CLI, SLURM submission, manifests, data access
+  schema/                canonical 44-column schema, 18 KU fields, `load_summary` normalizer
+  llm.py qa.py stats.py  vLLM helpers, QA prompts + grading, intervals / bootstrap / Holm
+  ws1/ ws2/ ws3/         the stages of each workstream
+  skill/                 the Alexandria knowledge skill: retrieval backend, MCP server, tool schemas, SKILL.md
+  dashboard/ report.py   live dashboard, per-WS PDF report
+slurm/stage.sbatch       generic job script (conda env + `alexandria <ws> <stage> ...`)
+slurm/ws2_ws3_debug.sh   the WS2 + WS3 chain (debug or full profile)
+tests/                   unit + small end-to-end tests (no cluster, no real data needed)
+```
 
-If you want to provide your own file loading and memory management, use
-[`    scientific summaries analysis::Context`](https://docs.rs/    scientific summaries analysis/*/    scientific summaries analysis/struct.Context.html)
-instead of `    scientific summaries analysis::Loader`.
+## Setup (once)
 
-# Performance
+| conda env | path | used by |
+|---|---|---|
+| `Alex` | `$STORE/envs/Alex` (Python 3.10, torch 2.8) | every CPU stage, tests, dashboard, index building |
+| `Alex-vllm` | `$STORE/envs/Alex-vllm` (Python 3.11, vLLM 0.32, torch + CUDA 13) | every LLM stage (`grounding`, `judge`, `questions`, `answer`, `grade`, `pilot`, `agent`) |
 
-`    scientific summaries analysis` optimizes for speed over memory by caching parsed information.
-The DWARF information is parsed lazily where possible.
+`$STORE` = `/mnt/vast-kisski/projects/kisski-l3s-llm4sci/gollam`. Both envs have this package installed editable
+(`pip install -e .`). Compute nodes have **no internet**, so everything is downloaded on a login node first:
 
-The library aims to perform similarly to equivalent existing tools such
-as `    scientific summaries analysis` from binutils, `eu-    scientific summaries analysis` from elfutils, and
-`llvm-    scientific summaries analysis` from the llvm project. Current benchmarks show a performance
-improvement in all cases:
+```bash
+conda activate Alex
+alexandria fetch-models          # every model in configs/models.yaml (pinned revisions) -> $STORE/hf_cache
+alexandria fetch-benchmarks      # PubMedQA (+ PMID -> title/DOI from NCBI), LitQA2, SciFact (+ corpus) -> $STORE/benchmarks
+HF_TOKEN=hf_... alexandria fetch-benchmarks hle hle-gold gpqa   # gated sets: accept their terms on huggingface.co first
+alexandria sample                # debug subset: 2 shards x 60 rows per source group -> runs/debug/_sample
+python -m pytest -q              # 82 tests, ~1 min
+alexandria list                  # every stage: kind, resources, env, what it needs
+```
 
-![    scientific summaries analysis runtime](benchmark-time.svg)
+Models (`configs/models.yaml`, revisions pinned): answerers / agents **Qwen2.5-7B-Instruct, OLMo-3-7B-Instruct,
+Granite-3.3-8B-Instruct, Phi-4-mini-instruct** (4 families, 3.8-8.2B; OLMo-3 has open training data); question
+generator, WS2 / WS3 judge and WS1b judge **Qwen3-8B** (thinking off); WS1b grounding **Bespoke-MiniCheck-7B**;
+embedder **BAAI/bge-m3** (dense, CLS pooling).
 
-## License
+## How stages run
 
-Licensed under either of
+* A **stage** is one function registered with `@stage(ws, name, needs=..., resources=cpu|gpu, env=main|llm)`. It runs
+  on its own, reads only files earlier stages wrote, and writes `<out_root>/<profile>/<ws>/<stage>/`:
+  `manifest.json` (config fingerprint, code version, host, SLURM job, timing, status done / failed / skipped,
+  vLLM overrides), `dashboard.json` (panels for the dashboard and the PDF), and its data files.
+* **Profiles**: `debug` reads the stored sample and caps the work (WS1 GPU stages 100 papers, WS2 100 papers, WS3 100
+  items per benchmark); `full` reads the whole release with the settings in each `configs/ws*.yaml`.
+* **Map** stages (WS1 `features`, `lexical`, `neardup-sign`; WS2 `answer`; WS3 `pilot`, `agent`) split their work
+  over SLURM array tasks (`--array N`: shards for WS1, models for WS2 / WS3) and resume: finished parts are skipped
+  unless `--force`, and everything is recomputed when the stage's config fingerprint changed.
+* Any value can be overridden: `--set ws2.answer.models=[qwen2.5-7b]`, `--set site.llm.quantization=null`.
 
-  * Apache License, Version 2.0 ([`LICENSE-APACHE`](./LICENSE-APACHE) or https://www.apache.org/licenses/LICENSE-2.0)
-  * MIT license ([`LICENSE-MIT`](./LICENSE-MIT) or https://opensource.org/licenses/MIT)
+```bash
+alexandria ws2 contexts --profile debug                      # one stage, here
+alexandria pipeline ws1 features keys quality --profile debug    # several, in order, one process
+alexandria submit ws1 quality --profile full --with-deps     # SLURM chain by `needs` (afterok)
+alexandria submit ws2 answer --profile debug --array 4       # one array task per answerer model
+alexandria submit ws2 results report --one-job --after <jobid>   # several stages in one allocation
+alexandria submit ws3 agent --dry-run ...                    # print the sbatch command only
+```
 
-at your option.
+**Cluster (GWDG Grete).** Account `kisski-l3s-llm4sci` may only use `grete:interactive` (max 2 submitted jobs per
+user, 12 h) and `grete:preemptible`; CPU partitions are not allowed, so CPU stages run on a small MIG slice. SCI-JEPA
+chains often hold both interactive slots, so Alexandria jobs go to `grete:preemptible`
+(`--set site.slurm.<cpu|gpu|debug>.partition=grete:preemptible`; `slurm/ws2_ws3_debug.sh` does this). MIG slices:
+`1g.10gb`, `2g.20gb` (plentiful), `3g.40gb` (scarce), A100 without native FP8 (fp8 = weight-only Marlin kernels).
 
-Unless you explicitly state otherwise, any contribution intentionally submitted
-for inclusion in the work by you, as defined in the Apache-2.0 license, shall be
-dual licensed as above, without any additional terms or conditions.
+## Dashboard
+
+```bash
+alexandria dashboard serve --profile debug --rebuild-every 30   # http://localhost:8770
+```
+
+One page for the whole project: Overview (pipeline graph with every stage's status), one tab per WS (every stage's
+panels: KPIs, tables, charts, figures), Runs (all manifests and errors), and links to the latest PDF of each WS.
+Stages describe their panels as JSON (`src/alexandria/dashboard/PANELS.md`), so a new WS appears without dashboard
+code. VS Code forwards port 8770 **only from the login node it is connected to** (glogin9 / glogin10 / ...): run the
+server on that node (`hostname`; `ss -ltnp | grep 8770`), or `ssh -L 8770:localhost:8770 <login node>`. To keep it
+running after the terminal closes: `setsid nohup alexandria dashboard serve ... > $STORE/logs/alexandria_dashboard.log 2>&1 &`.
+`data.json` is strict JSON (NaN / Infinity written as null): a browser rejects anything else.
+
+Each WS also has a `report` stage: `<run root>/<ws>/report/<WS>_report_<dataset>_<profile>.pdf` with the stage
+status and every stage's KPIs, tables, charts and figures; per-paper tables list papers with links, no text excerpts.
+
+## WS1: data quality, description and faithfulness
+
+| stage | kind | needs | what it produces |
+|---|---|---|---|
+| `features` | map | - | one row per paper: field status / lengths / truncation / refusals / leaks, language, wrong-paper evidence, garbled source, input type, claim structure, KU-Fixes flags (reused), metadata |
+| `keys` | reduce | - | column names and types per shard, claim sub-keys (KU-Fixes stats), leaked keys, `alias_candidates.csv`, `summary.schema.json`, normalizer check |
+| `lexical` / `lexical-report` | map / reduce | features | verbatim overlap (longest common span, >= 8/12/20 tokens), number and entity precision vs the source |
+| `neardup-sign` / `neardup` | map / reduce | - | MinHash-LSH near-identical summaries, split into known paper duplicates vs different papers |
+| `quality` | reduce | features | the flag table with Wilson 95% intervals per group and model, field status, examples, `flags_table.tex`, figure |
+| `describe` | reduce | features | discipline, year, language, OA, input type, model, field lengths, citations, retractions; main-text figure |
+| `reconcile` | reduce | - | published numbers vs measured ones; each explanation is checked by arithmetic, residual shown |
+| `provenance` | reduce | features | summarizer model, tokens, cost estimate, prompt overhead, failure rate; prompt / temperature from config |
+| `human-sample` / `human-agreement` | reduce | features | stratified annotation packets + guidelines; Krippendorff's alpha and gold labels from filled-in sheets |
+| `grounding` / `grounding-report` | reduce (GPU) | features | MiniCheck-7B sentence-level grounding of KU sentences against the source |
+| `judge` / `judge-report` | reduce (GPU) | features | Qwen3-8B sentence-level judge (evidence, then verdict per sentence; section = worst sentence), same papers as `grounding`; agreement with MiniCheck |
+| `calibrate` | reduce | judge, human-agreement | judge and MiniCheck vs human gold: kappa, confusion, AUC, threshold, isotonic map |
+| `abstract-support` | reduce | features | what abstract-only input can support of the long methods / results fields |
+| `datasheet` | reduce | describe, quality, reconcile, provenance, keys | Gebru et al. datasheet + Croissant RAI, from measured numbers |
+
+Methods: rates carry Wilson 95% intervals; per-paper length flags use a robust z-score of log(1 + words) against the
+delivered lengths of the same field and input type (Iglewicz & Hoaglin, |z| > 3.5); grounding follows MiniCheck
+(Tang et al., 2024) at sentence level; the LLM judge uses the human protocol's label set so `calibrate` can map both
+to human gold. **Reused, not recomputed:** OpenAlex metadata, the KU-Fixes fault index (placeholder titles / authors,
+needs_regeneration, claims JSON faults) and KU-Fixes paper duplicates. Current decisions (2026-10-21): MiniCheck and
+judge on 100 papers (debug and full), human labelling off (`ws1b.human.enabled: false` -> `human-sample`,
+`human-agreement`, `calibrate` are `skipped`).
+
+**Shared normalizer for every WS:** `from alexandria.schema import load_summary` gives the one cleaned view of a KU
+(reviewed alias table `src/alexandria/resources/aliases.yaml`, placeholders nulled, claims parsed, every repair listed
+in `issues`).
+
+```bash
+alexandria submit ws1 all --profile debug --one-job                       # every CPU stage, one allocation
+alexandria submit ws1 grounding judge --profile debug --one-job --after <cpu job id>
+alexandria submit ws1 features --profile full --array 16                  # full: shards over 16 array tasks
+```
+
+## WS2: representation comparison on the QA bench
+
+**Question.** With the gold paper given, how well does a reader model answer paper-specific questions from (a) no
+context, (b) the full text, (c) the full text cut to the KU's token count, (d) the KU as released, (e) the KU after
+cleaning? Measures fidelity / retention and compression; usefulness without the gold paper is WS3.
+
+**Unit of representation.** In Scientific-Summaries one row = one paper = one KU: the 18-field structured summary
+(`SUMMARY_FIELDS`; the KU-Fixes errata count 22.1M KUs for 22.1M papers). WS2 does **not** generate KUs; the `ku`
+stage takes each paper's KU from its row and enforces exactly one KU per paper.
+
+| stage | GPU | what |
+|---|---|---|
+| `papers` | | evaluation papers: summary written from full text, readable source (not `source_garbled`), not a wrong-paper suspect, >= 5,000 source characters, usable KU (not KU-Fixes `needs_regeneration`), not a dropped duplicate copy; stratified by domain; WS1-flagged papers over-sampled to 30% (enough affected papers for the cleaning comparison); deterministic (seed 0) |
+| `questions` | yes | Qwen3-8B writes 10 candidate short-answer questions per paper from the source (JSON with answer, type, exact evidence quote; vLLM structured outputs); kept (<= 5 / paper) only if: evidence quote found in the source (rapidfuzz partial ratio >= 90), answer <= 15 words and not a notation / numbering reference, no >= 8-word run copied from the source, not a near-duplicate, and an LLM critic (sees question + answer + evidence, not the paper) confirms it identifies the study, has one answer, is not trivial and needs the paper; every candidate's outcome is stored (`all_generated.parquet`) |
+| `ku` | | one KU per paper: the 18 fields as released (`ku_raw`) and with the official KU-Fixes applied (`ku_fixed`: title / authors fixes, claims sub-keys normalised), plus fault flags, needs_regeneration, duplicate tier; no LLM |
+| `contexts` | | per paper and arm the answerer's context and its token count (one reference tokenizer, Qwen2.5): `closed_book` (none), `full_text` (first 30k characters), `full_text_matched` (source cut to the `ku_clean` token count: compression control), `ku_raw` (KU as released, 18 labelled fields), `ku_clean` (KU-Fixes + `load_summary`: placeholders removed, markup stripped, claims as a list); every context capped at `max_context_tokens`; question-context 5-gram overlap per arm (lexical-bias covariate) |
+| `answer` | yes | 4 answerer families, identical system prompt (short answer or exactly "I don't know"), context first and question last (prefix caching), temperature 0, max 64 tokens; one array task per model |
+| `grade` | yes | SimpleQA protocol (Wei et al., 2024): a fixed judge (Qwen3-8B) returns CORRECT / INCORRECT / NOT_ATTEMPTED (numbers to the gold answer's precision); plus model-free normalised exact match and token F1 |
+| `results` | | accuracy = CORRECT / all with 95% paper-clustered bootstrap CIs (2,000 resamples, same resample for every arm and model, so differences are paired); Δ vs closed book and vs full text with Holm-adjusted p-values; strata: context-dependent questions (wrong closed-book), before / after cleaning (`ku_clean − ku_raw`) on WS1-flagged vs unflagged papers, question type, domain, accuracy vs context tokens (compression), help / harm flips, accuracy by question-context overlap tercile; `accuracy_table.tex` |
+| `report` | | WS2 PDF |
+
+**Bias controls.** The question generator (Qwen3) is a different family from three of four answerers and is also the
+judge (stated in the paper; the model-free EM / F1 is the check). Paraphrase rule + overlap covariate address the
+full-text arm's lexical advantage on questions written from the source. `full_text_matched` separates "the KU is
+better written" from "the KU is shorter". Papers are the bootstrap unit, because questions of one paper are not
+independent.
+
+**Debug result (2026-10-22, 100 papers, 418 questions, 4 models):** closed book 1-5%, full text 67-73%, `ku_raw`
+52-54%, `ku_clean` 51-55%, `full_text_matched` 45-49%: at equal tokens the KU beats truncated full text by 5-9
+points; cleaning has no measurable effect.
+
+## WS3: benchmarks via the Alexandria knowledge skill
+
+**Question.** Without the paper, does a model answer scientific benchmark questions better when it can search the KU
+corpus (or the full texts) than alone, than with self-consistency at matched compute, and than with plain RAG?
+
+**The skill** (`alexandria.skill`): one retrieval backend exposed three ways: an MCP server
+(`alexandria skill mcp`), a `SKILL.md`, and OpenAI-style function schemas. Tools: `search(query, field?, k)` over the
+KU fields and claims, `get_paper(id, fields?)`, `search_fulltext(query, k)` over source-text chunks. Retrieval is
+hybrid: BM25 (Robertson & Zaragoza; Lucene idf, k1 = 0.9, b = 0.4, Pyserini defaults) + bge-m3 dense (Chen et al.,
+2024), fused with reciprocal rank fusion (Cormack et al., 2009; k = 60, depth 100). Every tool response is cached by
+(index version, view, tool, arguments), so every run replays exactly and the cache can be released with the results.
+
+| stage | GPU | what |
+|---|---|---|
+| `benchmarks` | | one item table: **qabench-open** (WS2 questions without the paper: the paper must be found), **PubMedQA** (pqa_labeled, question only, yes / no / maybe; Jin et al., 2019), **LitQA2** (LAB-Bench; multiple choice + "Insufficient information", options shuffled per item; Laurent et al., 2024), **SciFact** (dev claims with a single SUPPORT / CONTRADICT label -> true / false; Wadden et al., 2020), **HLE** text-only / **HLE-gold** / **GPQA-Diamond** (gated); then gold-paper linking (below) |
+| `index` | yes | corpus = profile's papers + the linked gold papers, minus a blocklist of benchmark-defining papers (HLE, GPQA, LAB-Bench, SciFact, PubMedQA); units per view: `summary` (one per cleaned KU field + one per claim with its evidence), `fulltext` (300-word chunks, 50 overlap, <= 20k words / paper); BM25 + bge-m3 embeddings (fp16, L2-normalised) per view; version hash |
+| `pilot` | yes | tool-call reliability of each model **without** constrained decoding (20 calls per benchmark); gate >= 95% well-formed |
+| `agent` | yes | one harness for every arm (below); one array task per model |
+| `grade` | yes | qabench-open: SimpleQA judge (Qwen3-8B); labels / option letters: exact match; HLE: official HLE judge prompt (Phan et al., 2025); abstentions recorded |
+| `results` | | accuracy per benchmark x arm x model with 95% cluster-bootstrap CIs (clusters = gold papers for the QA bench, items otherwise), paired Δ vs A0 with Holm correction, help / harm flips vs A0, gold-paper-retrieved rate, tool calls, retrieved tokens, prompt tokens and GPU-seconds per question, LitQA2 precision (correct / answered), every benchmark also on its **[gold in corpus]** subset, pilot reliability table with gate pass / FAIL, headline figure Δ accuracy over A0 vs model size; `main_table.tex` |
+| `report` | | WS3 PDF |
+
+**Arms** (`ws3.agent.arm_defs`):
+
+| arm | what | context the model gets |
+|---|---|---|
+| `A0` | model alone, one answer step | question only |
+| `A0+` | self-consistency (Wang et al., 2023): 5 samples at T = 0.7, majority vote | compute-matched no-retrieval baseline |
+| `R` | plain RAG: top-20 hybrid passages from full text + KU fields, pasted once | up to the retrieved-token budget |
+| `F` | agent with `search_fulltext` | full-text chunks |
+| `S` | agent with `search` + `get_paper` over the KUs | KU fields and claims |
+| `S-OA` | as `S`, restricted to papers that have full text | separates "KU" from "open-access subset" |
+| `Oracle` | the gold paper's text (QA bench only) | upper bound |
+| `W`, `W-sch`, `S+W` | web search arms | compute nodes are offline: reported as not run |
+
+**Harness.** Same system prompt for every arm (only tool descriptions differ), same limits (<= 6 tool calls, <= 8k
+retrieved tokens, <= 400 tokens per step), same answer format. Each turn is one JSON action `{thought, action,
+arguments}` with generation constrained to the arm's tool schemas, so tool-call formatting cannot confound the
+comparison across model families; `pilot` reports each model's unconstrained reliability. The bge-m3 query encoder
+runs on CPU so vLLM gets the whole GPU slice. Every episode logs tool calls, retrieved tokens, prompt / output
+tokens, GPU-seconds and the papers it saw.
+
+**Gold-paper linking** (`ws3/gold.py`). A retrieval arm can only be helped by finding the paper when that paper is in
+the corpus, and the gold-paper-retrieved rate needs to know which row it is. Items carry `gold_refs`: LitQA2 DOIs
+(`sources`), PubMedQA PMID -> title + DOI (NCBI E-utilities, fetched on the login node), SciFact cited corpus
+documents -> titles. They are matched to release rows by normalised DOI, else by exact normalised title (>= 5 words);
+rows with full text win. The lookup over all release rows (metadata columns only) is built once and cached in
+`$STORE/Alexandria-ICML-2027/assets/id_lookup_<dataset>_w5.parquet`. Unlinked items stay in the benchmark (all-item
+accuracy) and are excluded from the `[gold in corpus]` subset.
+
+**Debug linkage (local release = arXiv + PubMed subsets only):** qabench-open 100/100, SciFact 17/100, PubMedQA
+2/100, LitQA2 0/100 (its papers are 2024 journal / bioRxiv papers, in the web-papers / bethgelab subsets that are not
+on local storage). **Pilot:** Qwen2.5 97.5%, Granite 95%, OLMo 91%, Phi-4-mini 32.5% well-formed (OLMo and Phi
+FAIL the gate; their agent results are reported with constrained decoding only).
+
+**Debug result (2026-10-22, 4 models, ~500-paper corpus; not paper numbers):**
+
+| benchmark | A0 | R (plain RAG) | S (agent over KUs) | F (agent over full text) | gold paper found (R / S) |
+|---|---|---|---|---|---|
+| qabench-open | 2-7% | 62-63% | 20-34% | 15-34% | 98% / 67% (Oracle 65-72%) |
+| SciFact [gold in corpus], 17 items | 47-76% | 65-82% | 65-82% | 53-59% | 100% / 96% |
+| SciFact, all | 58-73% | 38-54% | 39-46% | 40-48% | 17% / 16% |
+| PubMedQA, all | 19-41% | 18-33% | 19-29% | 13-29% | 2% / 2% |
+| LitQA2, all (gold never in corpus) | 7-29% | 1-4% | 2-7% | 3-10% | 0% / 0% |
+
+When the gold paper is in the corpus, retrieval helps (SciFact subset). When it is not, irrelevant papers lower
+accuracy (SciFact, PubMedQA), and on LitQA2 the retrieval arms choose "Insufficient information" ~90% of the time
+(A0: 60%); their precision on answered items is higher (0.40-0.46 vs 0.31).
+
+## ICML run protocol (debug -> full)
+
+Order (each step only needs the previous ones; everything is restartable):
+
+```bash
+# 0. login node (internet): models, benchmarks (HF_TOKEN for HLE / GPQA), tests
+alexandria fetch-models && alexandria fetch-benchmarks && python -m pytest -q
+# 1. WS1 full: CPU audit over every shard, then the GPU faithfulness stages
+alexandria submit ws1 features --profile full --array 16 --set site.slurm.cpu.partition=grete:preemptible
+alexandria submit ws1 all --profile full --one-job --after <features job> --set site.slurm.cpu.partition=grete:preemptible
+alexandria submit ws1 grounding judge --profile full --one-job --after <cpu job> --set site.slurm.gpu.partition=grete:preemptible
+# 2. WS2 + WS3 full chain (needs WS1 features + quality of the full profile)
+PROFILE=full GPU_GRES=gpu:3g.40gb:1 LLM_QUANT=null LLM_LEN=null CTX_TOKENS=16000 bash slurm/ws2_ws3_debug.sh
+# 3. dashboard + PDFs
+alexandria dashboard serve --profile full --rebuild-every 30
+```
+
+Always run the same chain on `--profile debug` first (`bash slurm/ws2_ws3_debug.sh`; reuse valid stages with
+`SKIP="questions pilot"`) and check the dashboard before spending full-profile GPU hours.
+
+| setting | debug (tested) | full (paper) |
+|---|---|---|
+| WS1 input | 2 shards x 60 rows per group | every shard (4,353 local: arXiv 4,006 + PubMed 347) |
+| WS1b grounding / judge papers | 100 | 100 (user decision 2026-10-21; plan: 400-600) |
+| WS2 papers / questions | 100 / 418 | 1,000 / ~4,500 |
+| WS3 items | 100 per benchmark | every item (PubMedQA 1,000, LitQA2 199, SciFact dev 188 single-label claims, QA bench all, HLE / GPQA if gated sets fetched) |
+| WS3 corpus | WS1 sample + gold papers (~500 papers) | the full release (see open items) |
+| vLLM weights / context | fp8 weight-only, 14,336 tokens, 2g.20gb | bf16 (`LLM_QUANT=null`), native context (`LLM_LEN=null`), 3g.40gb |
+| WS2 context cap | 12,000 tokens | 16,000 tokens |
+| WS3 sampling | T = 0, seed 0 | T = 0.6, seeds [0, 1, 2] (`--set ws3.agent.temperature=0.6 --set 'ws3.agent.seeds=[0,1,2]'`) |
+| bootstrap | 2,000 cluster resamples | 2,000 (10,000 for the final tables) |
+
+**Measured debug cost** (per job, MIG 2g.20gb unless noted): WS2 questions 20-24 min, answer 6-33 min per model,
+grade 3-5 min; WS3 index 3 min, pilot 3-4 min per model, agent 0.5-2.5 h per model (400 items x 7 arms), grade 3 min;
+WS1 grounding 8-30 min, judge 5-27 min. Full-profile WS3 is ~50x the debug item count per seed.
+
+**Reproducibility.** Dataset revision `232547b7`, model revisions pinned in `configs/models.yaml`, every
+manifest records the config fingerprint, code version, host, SLURM job and vLLM overrides; questions, KUs, contexts,
+items, retrieval caches and graded answers are stored as parquet / sqlite next to the results, so every number in the
+paper can be traced to a file and replayed.
+
+**What goes in the paper.** WS1: `quality/flags_table.tex`, `describe` figure, datasheet. WS2: `results/accuracy_table.tex`,
+accuracy-vs-tokens figure, cleaning-effect table. WS3: `results/main_table.tex`, headline Δ-vs-size figure, gold-in-corpus
+table, pilot reliability. Each WS PDF collects all of them.
+
+## Threats to validity and open items
+
+* **Full-release WS3 index** (required before the full run): building BM25 + bge-m3 over 22M KUs (~50 units / paper)
+  is not feasible per run on our allocation. Options: (a) reuse the dataset's released search indices
+  (`search/`: FAISS gte-modernbert + BM25 over the KU fields, claims and chunks; partly on local storage), (b) index a
+  fixed large subsample (`ws3.index.max_papers`) that always contains every gold paper. The debug corpus (~500 papers)
+  makes retrieval much easier than at full scale; debug WS3 numbers are not paper numbers.
+* **Agent array granularity** (required before the full run): `agent` splits work by model, so one model's full run
+  (~50x debug) exceeds the 12 h job limit; it needs item sharding within a model.
+* **Gold coverage** is limited by the local copy (arXiv + PubMed): LitQA2 cannot be linked at all, PubMedQA barely.
+  Downloading the web-papers and bethgelab subsets (metadata columns suffice for linking) would fix this.
+* **HLE / GPQA** need `HF_TOKEN` with accepted terms.
+* **Same-family judge**: Qwen3-8B writes the QA bench and judges it; a second judge (different family) on a
+  subsample, plus EM / F1, is the planned check.
+* **Pilot gate**: Phi-4-mini (32.5%) and OLMo-3 (91%) fail the 95% unconstrained tool-call gate; report their agent
+  arms as "constrained decoding" results or drop them from the agent comparison.
+* **Web arms** (`W`, `W-sch`, `S+W`) cannot run on offline compute nodes.
+* **Agents vs plain RAG** (debug finding): on the QA bench R finds the gold paper 98% of the time, the agentic arms
+  ~67%; worth a prompt / budget ablation before the full run.
+* **Gold absent -> retrieval hurts**: report all-item and [gold in corpus] numbers side by side, and the abstention
+  rate (LitQA2) next to accuracy; at full scale the corpus contains far more papers, so linkage coverage decides how
+  much of each benchmark can show the skill's effect.
+
+## Datasets: run on any data
+
+Everything dataset-specific lives in `configs/datasets/<name>.yaml`: parquet location, source groups, column mapping
+to the canonical schema (`src/alexandria/resources/canonical_schema.json`), link rules (ids -> arXiv / PMC / DOI /
+OpenAlex pages), optional extras (KU-Fixes, published numbers for `reconcile`, documented length targets). Copy
+`configs/datasets/_template.yaml`, then `alexandria sample --dataset my-data` and run any stage with
+`--dataset my-data`. Missing columns become typed nulls; stages that need a missing extra are `skipped` with the
+reason. `tests/test_any_dataset.py` runs the CPU pipeline on a synthetic dataset with other column names.
+
+**Adding a workstream:** create `src/alexandria/wsN/` with `@stage("wsN", ...)` modules and a `report` via
+`register_report`, add `configs/wsN.yaml`, add `"wsN"` to `WORKSTREAMS` in `cli.py`; `alexandria wsN <stage>`,
+`submit`, `pipeline`, the dashboard and the PDF pick it up.
+
+## Data notes
+
+* Column names are canonical in every released shard; key variants exist only inside the `claims` JSON
+  (`caveats`, `contradating_evidence`, ...). Types differ between shards; `data.iter_batches` casts to KU-Fixes'
+  `unified_schema.json` (the local `normalized/` copy stores arxiv OpenAlex columns as strings).
+* Some arxiv/old sources are unreadable PDF extractions (font mojibake); their fluent KUs are flagged `source_garbled`.
+* Every field with a documented length target is delivered at ~0.4-0.9x of it (executive summary: median 208 words,
+  max 340, vs 400-500); the comparison is one dataset-level table (`quality/length_vs_documented.csv`).
+* `text_length` is clipped at 100,000 characters; PubMed `text_raw` is mostly empty (`text_sanitized` is used).
+* PubMed rows carry no PMID and mostly no DOI (`paper_id` is an extraction path): link PubMed papers by title.
+* Local storage holds the arXiv and PubMed subsets only (bethgelab and web-papers are not downloaded).
