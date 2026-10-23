@@ -1,8 +1,6 @@
 # Scientific Summaries Analysis
 
-[![](https://img.shields.io/crates/v/    scientific summaries analysis.svg)](https://crates.io/crates/    scientific summaries analysis)
-[![](https://img.shields.io/docsrs/    scientific summaries analysis.svg)](https://docs.rs/    scientific summaries analysis)
-[![Coverage Status](https://coveralls.io/repos/github/gimli-rs/    scientific summaries analysis/badge.svg?branch=master)](https://coveralls.io/github/gimli-rs/    scientific summaries analysis?branch=master)
+
 
 `    scientific summaries analysis` provides a cross-platform library for retrieving per-address debug information
 from files with DWARF debug information. Given an address, it can return the file name,
