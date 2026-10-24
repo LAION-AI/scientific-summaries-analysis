@@ -10,6 +10,7 @@
     alexandria dashboard serve --profile debug        # http://localhost:8770 (VS Code forwards the port)
     alexandria fetch-models                           # login node: download models used by GPU stages
     alexandria fetch-benchmarks                       # login node: PubMedQA, LitQA2, SciFact (+ gated with HF_TOKEN)
+    alexandria fetch-ws4                              # login node: WS4 models, replay / control data, eval sets, lm-eval data
     alexandria skill mcp --profile debug              # the Alexandria skill as an MCP server (stdio)
     alexandria submit ws1 quality --profile full --with-deps   # SLURM jobs, chained by what each stage needs
 
@@ -25,7 +26,7 @@ import sys
 from .config import PROFILES, available_datasets, load_config
 from .runtime import STAGES, Context, run_stage
 
-WORKSTREAMS = ("ws1", "ws2", "ws3")
+WORKSTREAMS = ("ws1", "ws2", "ws3", "ws4", "ws5", "ws6")
 
 
 def _load_stages() -> None:
@@ -195,6 +196,12 @@ def main(argv: list[str] | None = None) -> int:
         os.environ.setdefault("HF_HOME", str(cfg.site.hf_home))
         res = fetch(cfg, rest or None)
         return 0 if any(v == "ok" for v in res.values()) else 1
+    if cmd == "fetch-ws4":
+        from .ws4.fetch import fetch as fetch_ws4
+        status = fetch_ws4(load_config("ws4", "debug"))
+        bad = {k: v for k, v in status.items() if v != "ok"}
+        print("\n".join(f"{k}: {v}" for k, v in bad.items()) or "fetch-ws4: everything ok")
+        return 0
     if cmd == "skill" and rest[:1] == ["mcp"]:
         return cmd_skill_mcp(rest[1:])
     if cmd == "pipeline" and rest and rest[0] in WORKSTREAMS:

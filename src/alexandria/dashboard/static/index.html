@@ -3,22 +3,30 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Alexandria Dashboard</title>
+<title>Alexandria ICML 2027</title>
 <link rel="stylesheet" href="style.css">
 <script src="vendor/chart.umd.min.js"></script>
 <script>if(!window.Chart){document.write('<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"><\/script>')}</script>
 </head>
 <body>
-<header>
-  <h1>Alexandria ICML 2027</h1>
-  <span id="dataset" class="badge">…</span>
-  <span id="profile" class="badge">…</span>
-  <span id="reports"></span>
-  <span id="built" class="muted">loading…</span>
-  <button id="theme" type="button" title="Theme: auto / light / dark">Theme: auto</button>
+<header class="topbar">
+  <a class="brand" href="#/overview" aria-label="Alexandria ICML 2027, overview">
+    <span class="logo" aria-hidden="true">A</span><span class="brand-text">Alexandria ICML 2027</span>
+  </a>
+  <div class="chips">
+    <span id="dataset" class="chip">…</span>
+    <span id="profile" class="chip">…</span>
+  </div>
+  <div class="spacer"></div>
+  <span id="reports" class="reports"></span>
+  <span id="built" class="updated">loading…</span>
+  <button id="theme" type="button" class="iconbtn" title="Theme: auto / light / dark" aria-label="Theme">◐</button>
 </header>
-<nav id="tabs" aria-label="Sections"></nav>
-<main id="main"><p class="muted">Loading data.json …</p></main>
+<div class="layout">
+  <nav id="nav" class="sidebar" aria-label="Sections"></nav>
+  <main id="main"><p class="muted pad">Loading data.json …</p></main>
+</div>
+<div id="lightbox" class="lightbox" hidden><img alt=""></div>
 <script src="app.js"></script>
 </body>
 </html>

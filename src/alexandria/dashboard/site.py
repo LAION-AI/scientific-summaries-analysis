@@ -24,6 +24,23 @@ if TYPE_CHECKING:
 STATIC = Path(__file__).with_name("static")
 CDN_CHART = "https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"
 
+# One line per workstream for the Overview cards (title = short name, question = what the WS answers). A WS that is
+# not listed here still appears, titled by its id.
+WS_INFO = {
+    "ws1": {"title": "Data quality & faithfulness",
+            "question": "Is the dataset what it claims to be? Data quality, description, faithfulness."},
+    "ws2": {"title": "KU vs full text (paper given)",
+            "question": "With the paper given: how much does the KU keep vs the full text, at what token cost?"},
+    "ws3": {"title": "Knowledge skill on benchmarks",
+            "question": "Without the paper: does searching the KU corpus help models on science benchmarks?"},
+    "ws4": {"title": "Training signal (SFT / GRPO)",
+            "question": "Are summaries / KUs a good training signal? Post-training (SFT, GRPO) vs full papers and controls."},
+    "ws5": {"title": "Teacher distillation",
+            "question": "Can a 9-12B student, distilled from teacher KUs, match the teacher at a fraction of the cost?"},
+    "ws6": {"title": "Embeddings as input",
+            "question": "Extreme compression: can a projected KU embedding (a few knowledge tokens) replace the text?"},
+}
+
 
 def _read_json(p: Path) -> Any:
     try:
@@ -125,7 +142,13 @@ def build(cfg: Config) -> Path:
         payload = _read_json(sdir / "dashboard.json") if (sdir / "dashboard.json").exists() else None
         if isinstance(payload, dict):
             _copy_images(payload, sdir, root, ws, stage)
+        secs = [r["seconds"] for r in stage_runs if isinstance(r.get("seconds"), (int, float))]
+        failed = [r for r in stage_runs if r.get("status") == "failed"]
         entry = {"ws": ws, "stage": stage, "status": _stage_status(stage_runs),
+                 "seconds": sum(secs) if secs else None, "tasks": len(stage_runs),
+                 "started": min((r["started"] for r in stage_runs if r.get("started")), default=None),
+                 "finished": max((r["finished"] for r in stage_runs if r.get("finished")), default=None),
+                 "error": failed[0]["error"] if failed else None,
                  "title": (payload or {}).get("title") or stage, "summary": (payload or {}).get("summary") or "",
                  "updated": (payload or {}).get("updated"), "panels": (payload or {}).get("panels") or []}
         workstreams.setdefault(ws, []).append(entry)
@@ -141,6 +164,7 @@ def build(cfg: Config) -> Path:
                     "groups": [s.group for s in cfg.data.sources]},
         "reports": _copy_reports(base, root),
         "out_root": str(base), "registry": registry, "workstreams": workstreams, "runs": runs,
+        "ws_info": {ws: WS_INFO.get(ws, {"title": ws.upper(), "question": ""}) for ws in workstreams},
         "chart_cdn": CDN_CHART})
     return root
 

@@ -43,10 +43,12 @@ def embedder_spec(cfg, name: str) -> dict[str, Any]:
 
 def load_llm(spec: dict, gpu_memory_utilization: float = 0.85, max_model_len: int | None = None):
     from vllm import LLM
+    lora = {"enable_lora": True, "max_lora_rank": int(spec.get("max_lora_rank", 64))} if spec.get("enable_lora") else {}
     llm = LLM(model=spec["hf"], revision=spec.get("revision"), tokenizer_revision=spec.get("revision"),
               max_model_len=int(max_model_len or spec.get("max_model_len", 32768)),
               gpu_memory_utilization=gpu_memory_utilization, enable_prefix_caching=True, seed=0,
-              trust_remote_code=bool(spec.get("trust_remote_code", False)), quantization=spec.get("quantization"))
+              trust_remote_code=bool(spec.get("trust_remote_code", False)), quantization=spec.get("quantization"),
+              **lora, **(spec.get("vllm_kwargs") or {}))
     return llm, llm.get_tokenizer()
 
 
