@@ -178,7 +178,7 @@ def run_results(ctx: Context) -> dict:
                                    "gate": "pass" if x["well_formed"].mean() >= gate else "FAIL"}
                                   for m, x in pilot.groupby("model")]
     pd.DataFrame(rel).to_csv(ctx.out / "pilot_reliability.csv", index=False)
-    panels: list[dict] = [{"type": "kpis", "items": [
+    panels: list[dict] = [{"type": "kpis", "headline": True, "items": [
         {"label": "benchmarks", "value": int(acc["bench"].nunique()), "fmt": "int"},
         {"label": "models", "value": int(acc["model"].nunique()), "fmt": "int"},
         {"label": "arms", "value": int(acc["arm"].nunique()), "fmt": "int"},

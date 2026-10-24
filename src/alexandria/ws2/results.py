@@ -151,7 +151,7 @@ def run(ctx: Context) -> dict:
                 {"key": "diff", "label": "Δ accuracy", "fmt": "pct1"}, {"key": "lo", "label": "lo", "fmt": "pct1"},
                 {"key": "hi", "label": "hi", "fmt": "pct1"}, {"key": "p_holm", "label": "p (Holm)", "fmt": "float3"}]
     ctx.publish("WS2 results: representation comparison", [
-        {"type": "kpis", "items": [
+        {"type": "kpis", "headline": True, "items": [
             {"label": "questions", "value": int(pq["qid"].nunique()), "fmt": "int"},
             {"label": "papers", "value": int(pq["paper_key"].nunique()), "fmt": "int"},
             {"label": "answerer models", "value": len(models), "fmt": "int", "hint": ", ".join(models)},

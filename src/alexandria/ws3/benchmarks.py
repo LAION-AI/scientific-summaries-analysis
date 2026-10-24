@@ -201,8 +201,9 @@ def run(ctx: Context) -> dict:
         try:
             its = loaders[name]()
         except FileNotFoundError as e:                  # missing files only; a loader bug must fail the stage
-            status.append({"bench": name, "items": 0, "status": f"not available ({type(e).__name__}: {str(e)[:80]}); "
-                           f"run `alexandria fetch-benchmarks` (gated sets need HF_TOKEN)"})
+            gated = (SOURCES.get(name) or {}).get("gated")
+            status.append({"bench": name, "items": 0, "status": "not run: gated, needs HF_TOKEN" if gated
+                           else "not run: not downloaded (alexandria fetch-benchmarks)", "detail": str(e)[:200]})
             continue
         df = pd.DataFrame(its).sample(frac=1.0, random_state=seed)
         if n and len(df) > int(n):                               # spread over clusters (papers) first

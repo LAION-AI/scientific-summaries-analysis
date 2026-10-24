@@ -211,7 +211,7 @@ def run(ctx: Context) -> dict:
     p, plo, phi = wilson(any_crit, n_all)
     fmt_rows = allg.drop(columns=["sev"]).to_dict("records")
     ctx.publish("Data quality flags", [
-        {"type": "kpis", "items": [
+        {"type": "kpis", "headline": True, "items": [
             {"label": "papers checked", "value": n_all, "fmt": "int"},
             {"label": "with a critical flag", "value": p, "fmt": "pct1", "status": "bad" if p > 0.01 else "warn",
              "hint": f"95% CI {plo:.2%}-{phi:.2%}"},
