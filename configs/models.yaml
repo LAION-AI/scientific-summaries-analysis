@@ -7,7 +7,19 @@ models:
                   chat_kwargs: {enable_thinking: false}}
   olmo3-7b:      {hf: allenai/Olmo-3-7B-Instruct,         revision: 6e5971d9eba42665f5bd5a0fcf047f299ce1dccc, family: olmo,    size_b: 7.3, max_model_len: 32768, open_data: true}
   granite3.3-8b: {hf: ibm-granite/granite-3.3-8b-instruct, revision: 51dd4bc2ade4059a6bd87649d68aa11e4fb2529b, family: granite, size_b: 8.2, max_model_len: 32768}
+  # WS4 training models (post-training): small debug model + the main ones (qwen3-4b; olmo3-7b above)
+  qwen2.5-0.5b:  {hf: Qwen/Qwen2.5-0.5B-Instruct,         revision: 7ae557604adf67be50417f59c2c2f167def9a775, family: qwen,    size_b: 0.5, max_model_len: 32768}
+  qwen3-4b:      {hf: Qwen/Qwen3-4B-Instruct-2507,        revision: cdbee75f17c01a7cc42f958dc650907174af0554, family: qwen3,   size_b: 4.0, max_model_len: 32768}
+  # WS5 students (official BF16 weights; multimodal checkpoints, used text-only) and a 27B-class extractor baseline
+  qwen3.5-9b:    {hf: Qwen/Qwen3.5-9B,                    revision: c202236235762e1c871ad0ccb60c8ee5ba337b9a, family: qwen3.5, size_b: 9.0, max_model_len: 32768}
+  gemma4-12b:    {hf: google/gemma-4-12B-it,              revision: 707f0a3b8a3c7ad586ed01e27eafbad8a27dd0f7, family: gemma,   size_b: 12.0, max_model_len: 32768}
+  gemma4-31b:    {hf: google/gemma-4-31B-it,              revision: 842da3794eaa0b77d5f08bae87a17459d91ff475, family: gemma,   size_b: 31.0, max_model_len: 32768}
+  # WS5 teacher: the largest open model that fits one 40 GB MIG slice (official FP8; hybrid linear / full attention,
+  # so long papers fit); Apache-2.0, so its outputs may train other models and be released openly
+  qwen3.5-27b:   {hf: Qwen/Qwen3.5-27B-FP8,               revision: 97f5941bf617e31c5e237364a8602ce3f03a551a, family: qwen3.5, size_b: 27.0, max_model_len: 40960,
+                  license: apache-2.0, chat_kwargs: {enable_thinking: false}, vllm_kwargs: {limit_mm_per_prompt: {image: 0, video: 0}}}
   phi4-mini:     {hf: microsoft/Phi-4-mini-instruct,      revision: cfbefacb99257ffa30c83adab238a50856ac3083, family: phi,     size_b: 3.8, max_model_len: 32768}
 
 embedders:
+  gte-modernbert: {hf: Alibaba-NLP/gte-modernbert-base, revision: e7f32e3c00f91d699e8c43b53106206bcc72bb22, pooling: cls, max_length: 8192, batch_size: 32}   # the dataset's search-index embedder (768-d)
   bge-m3: {hf: BAAI/bge-m3, revision: 5617a9f61b028005a4858fdac845db406aefb181, pooling: cls, max_length: 1024, batch_size: 64}

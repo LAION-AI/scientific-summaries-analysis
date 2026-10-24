@@ -1,0 +1,87 @@
+# WS5: teacher distillation. A strong teacher writes KUs (the dataset's 18-field structured summary) for 1-2k
+# open-access papers; 9-12B students learn to write them; quality and cost are measured on a disjoint test set.
+#   teacher: Qwen3.5-27B (open weights, Apache-2.0) on a 40 GB slice; optional provider anthropic (API key, login node)
+
+profiles:
+  # debug: tiny real-data test with the real teacher (Qwen3.5-27B) and a Qwen2.5-0.5B student
+  debug: {ws5_train: 24, ws5_dev: 4, ws5_test: 12, ws5_sizes: [8, 16, 24], ws5_students: [qwen2.5-0.5b],
+          ws5_teacher_provider: vllm, ws5_max_steps: 40, ws5_spot_check: 5, ws5_max_source_tokens: 3000,
+          ws5_baselines: [student_zero, released, teacher]}
+  full: {}
+
+ws5:
+  papers:
+    n_train: 2000
+    n_dev: 200
+    n_test: 1500
+    seed: 0
+    strata: [domain]
+    open_access_groups: ["arxiv/"]        # permissive sources (dataset README); others need OpenAlex oa_is_open_access
+    holdout_domains: 1                    # disciplines in test only (generalisation): a count (random) or a list,
+                                          #   e.g. [Economics & Finance, Astrophysics]; name them for the full run
+    min_source_chars: 5000
+
+  teacher:
+    provider: vllm                        # vllm (open-weight teacher on our GPUs) | anthropic (Claude Opus 5.5, needs a key)
+    local_model: qwen3.5-27b              # provider vllm: Qwen3.5-27B-FP8, Apache-2.0 (no API key, no output-use terms)
+    model: claude-opus-5-5                # provider anthropic only
+    effort: high                          # Opus 5.5 default is medium; thinking is always on (adaptive)
+    max_tokens: 32000
+    max_source_chars: 200000              # whole paper (Opus 5.5 has a 1M context; no silent truncation)
+    source_tokens: 32000                  # provider vllm: paper cut to this many tokens (context 40,960 on a 40 GB slice)
+    out_tokens: 6000
+    poll_seconds: 60
+    gpu_memory_utilization: 0.94         # 31 GB of FP8 weights on a 40 GB slice: the rest is KV cache
+    cpu_offload_gb: 0                     # > 0: keep this many GB of weights in CPU memory (20 GB slices; slower)
+
+  compliance:                             # checked before generating at scale (plan: teacher terms, CC-BY release)
+    terms_checked: false                  # set true only after reading the teacher provider's terms on training
+                                          #   other models with outputs and on releasing data / weights openly
+    max_unreviewed_requests: 50           # above this, provider anthropic refuses to run until terms_checked
+                                          # (the open-weight teacher's Apache-2.0 licence allows training and release)
+
+  validate:
+    span_k: 8                             # verbatim spans counted in word 8-grams (WS1 lexical)
+    fail_span: 12                         # a field with a >= 12-word span copied from the paper fails the gate
+    required_fields: [summary_title, executive_summary, research_context, research_question_hypothesis,
+                      methodological_details, key_results, interpretation_implications,
+                      contradictions_limitations, claims, three_takeaways]
+    spot_check: 50                        # human spot check packet (random valid train outputs)
+
+  train:
+    students: [qwen3.5-9b, gemma4-12b]    # official BF16 weights (not third-party GGUF distills)
+    methods: [lora, full]
+    sizes: [250, 500, 1000, 2000]         # learning curve (examples); capped at the valid train outputs
+    max_source_tokens: 16000
+    max_target_tokens: 4096
+    lora: {r: 64, alpha: 128, dropout: 0.05, target_modules: all-linear}
+    lr_lora: 1.0e-4
+    lr_full: 1.0e-5
+    epochs: 2
+    per_device_batch: 1
+    grad_accum: 16
+    max_steps: null                       # debug: profiles.debug.ws5_max_steps
+
+  generate:
+    baselines: [student_zero, released, extractor, teacher]   # + every trained student run
+    extractor: gemma4-31b                 # the 27B-class KU extractor baseline (closest open model available)
+    max_source_tokens: 16000
+    max_tokens: 4096
+    gpu_memory_utilization: 0.85
+
+  mcq:                                    # coverage: MCQ retention, WS2 protocol (questions from the full text)
+    generator: qwen3-8b
+    per_paper: 6
+    generate_per_paper: 10
+    max_source_tokens: 9000
+
+  judge:                                  # faithfulness: claim entailment by a judge from a third family
+    model: granite3.3-8b                  # third family: teacher Qwen3.5-27B, students Qwen3.5 / Gemma-4
+    max_claims: 12
+    max_source_tokens: 9000
+
+  answer:                                 # coverage answerer from yet another family
+    model: phi4-mini
+
+  results:
+    n_boot: 2000

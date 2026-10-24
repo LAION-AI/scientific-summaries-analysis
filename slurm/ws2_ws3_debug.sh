@@ -1,7 +1,9 @@
 #!/bin/bash
-# Submit the whole WS2 + WS3 debug run (100 papers / 100 items per benchmark) as a chain of SLURM jobs.
-#   bash slurm/ws2_ws3_debug.sh                          # needs WS1 `features` + `quality` of the debug profile
+# Submit the whole WS2 + WS3 run as a chain of SLURM jobs (afterok dependencies).
+#   bash slurm/ws2_ws3_debug.sh                          # debug: 100 papers / 100 items per benchmark
 #   SKIP="questions pilot" bash slurm/ws2_ws3_debug.sh   # reuse stages whose outputs are still valid
+#   PROFILE=full GPU_GRES=gpu:3g.40gb:1 LLM_QUANT=null LLM_LEN=null CTX_TOKENS=16000 bash slurm/ws2_ws3_debug.sh
+# Needs WS1 `features` + `quality` of the same profile.
 # Login node first: `alexandria fetch-benchmarks` (benchmark files, PubMedQA PMID metadata, SciFact corpus).
 # GPU stages run on 20 GB MIG slices of grete:preemptible with fp8 weights and a 14k context (recorded in every
 # manifest as llm_overrides); set GPU_GRES / LLM_* to change that, e.g. GPU_GRES=gpu:3g.40gb:1 LLM_QUANT=null.
@@ -11,13 +13,15 @@ ALEX=/mnt/vast-kisski/projects/kisski-l3s-llm4sci/gollam/envs/Alex/bin/alexandri
 GPU_GRES=${GPU_GRES:-gpu:2g.20gb:1}
 LLM_QUANT=${LLM_QUANT:-fp8}
 LLM_LEN=${LLM_LEN:-14336}           # OLMo-3-7B (no GQA) fits ~14.5k tokens of KV cache on a 20 GB slice
+PROFILE=${PROFILE:-debug}
+CTX_TOKENS=${CTX_TOKENS:-12000}     # WS2 context cap (fits LLM_LEN with the prompt); full runs: 16000
 SKIP=" ${SKIP:-} "
-P=(--profile debug
+P=(--profile "$PROFILE"
    --set site.slurm.cpu.partition=grete:preemptible --set site.slurm.gpu.partition=grete:preemptible
    --set site.slurm.debug.partition=grete:preemptible --set "site.slurm.gpu.gres=${GPU_GRES}"
    --set site.slurm.gpu.cpus=8 --set site.slurm.gpu.mem=64G --set site.slurm.gpu.debug_time=06:00:00
    --set "site.llm.quantization=${LLM_QUANT}" --set "site.llm.max_model_len=${LLM_LEN}"
-   --set ws2.contexts.max_context_tokens=12000)
+   --set "ws2.contexts.max_context_tokens=${CTX_TOKENS}")
 # benchmarks builds the release-wide id lookup once (gold-paper linking; cached afterwards): more CPUs, memory, time
 BIG=(--set site.slurm.debug.cpus=16 --set site.slurm.debug.mem=64G --set site.slurm.debug.debug_time=04:00:00)
 FORCE=${FORCE:---force}

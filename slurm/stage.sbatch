@@ -9,7 +9,7 @@
 #   alexandria submit ws1 features --profile full
 #   sbatch slurm/stage.sbatch ENV=main -- ws1 features --profile debug      # by hand
 #
-# Arguments: KEY=VALUE settings first (ENV=main|llm), then `--`, then the `alexandria` command line.
+# Arguments: KEY=VALUE settings first (ENV=main|llm|train), then `--`, then the `alexandria` command line.
 # (Grete sets SBATCH_EXPORT=none, so settings go on the command line, not in the environment.)
 set -euo pipefail
 ENVNAME=main
@@ -26,9 +26,11 @@ STORE=/mnt/vast-kisski/projects/kisski-l3s-llm4sci/gollam
 case "${ENVNAME}" in
   main) PY="${STORE}/envs/Alex/bin/python" ;;           # conda env "Alex"
   llm)  PY="${STORE}/envs/Alex-vllm/bin/python" ;;      # conda env "Alex-vllm" (vLLM)
+  train) PY="${STORE}/envs/Alex-train/bin/python" ;;    # conda env "Alex-train" (Alex-vllm + TRL, PEFT, lm-eval; WS4)
   *) echo "unknown ENV ${ENVNAME}"; exit 2 ;;
 esac
-export HF_HOME="${STORE}/hf_cache" HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1   # compute nodes have no internet
+export HF_HOME="${STORE}/hf_cache" HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_DATASETS_OFFLINE=1   # compute nodes have no internet
+export NLTK_DATA="${STORE}/nltk_data"                       # IFEval (lm-eval) needs punkt_tab
 export PYTHONUNBUFFERED=1 TOKENIZERS_PARALLELISM=false OMP_NUM_THREADS=1
 export VLLM_WORKER_MULTIPROC_METHOD=spawn
 export VLLM_USE_FLASHINFER_SAMPLER=0   # compute nodes have no nvcc: FlashInfer cannot JIT-compile its sampler

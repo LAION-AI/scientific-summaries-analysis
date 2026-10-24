@@ -1,0 +1,128 @@
+# WS4: training-signal study, post-training first (replaces the 1.7B pretraining claim D5).
+# Are the KU-derived representations a good TRAINING signal that pushes models, compared with full papers and
+# controls, under the same recipe and token budget? Merged with site.yaml, models.yaml and the dataset file.
+#   alexandria ws4 data --profile debug --set ws4.data.token_budget=200000
+
+profiles:
+  # debug: tiny real-data test (a 0.5B model, few papers, one seed, lm-eval --limit) to check the whole chain
+  debug: {ws4_train_papers: 24, ws4_heldout_papers: 12, ws4_eval_limit: 50, ws4_models: [qwen2.5-0.5b],
+          ws4_seeds: [0], ws4_max_steps: 30}
+  full: {}
+
+ws4:
+  papers:                                 # trained papers + held-out papers (knowledge-injection control), same pool
+    n_train: 2000
+    n_heldout: 500
+    seed: 0
+    strata: [domain]
+    min_source_chars: 5000                # eligibility as WS2: full-text input, readable, usable KU, not a dup copy
+    exclude_ws2_ws3: true                 # never train on WS2 / WS3 evaluation papers
+
+  probe:                                  # knowledge-injection questions (closed-book) on trained AND held-out papers
+    generator: qwen3-8b                   # = WS2 question generator and checks (ws2.questions), from the full text
+    per_paper: 3
+    generate_per_paper: 6
+
+  # The data conditions. All built from the SAME papers; doc conditions are token-matched to `token_budget`.
+  #   summary  the cleaned KU as plain-prose summary (KU-Fixes + WS1 normalizer; markdown sections)
+  #   ku       the same KU as a structured record (JSON of the 18 fields, claims as a list)
+  #   full     the paper's full text
+  #   diverse  paraphrase-diverse KU: each paper rendered in several formats (prose, JSON, YAML, HTML, bullet Q&A)
+  #   generic  size-matched generic science data (docs: FineWeb-Edu, disjoint from replay; QA: WebInstructSub)
+  #   none     replay data only, same steps ("no extra data" control); the untrained base model is also evaluated
+  conditions: [summary, ku, full, diverse, generic, none]
+
+  data:
+    tokenizer: train_model                # token counts with the trained model's tokenizer
+    token_budget: null                    # null = total tokens of the `summary` condition x budget_multiplier
+    budget_multiplier: 2                  # short conditions repeat (epochs) / `diverse` uses other formats instead
+    replay_share: 0.25                    # share of training tokens that are replay (general data), every condition
+    doc_max_tokens: 2048                  # training sequence length (documents are chunked to this)
+    formats: [prose, json, yaml, html, qa_bullets]   # `diverse` rotates over these
+    replay_docs: fineweb-edu              # resources below
+    replay_chat: tulu3
+    generic_docs: fineweb-edu-generic
+    generic_chat: webinstruct
+
+  qa_data:                                # instruction / QA pairs generated FROM each representation, same generator
+    generator: qwen3-8b
+    pairs_per_paper: 8                    # equal for every condition (papers with fewer valid pairs in any condition
+    generate_per_paper: 14                #   are capped at the minimum, so counts stay equal per paper)
+    max_source_tokens: 12000
+    max_tokens: 3000
+    min_evidence_match: 85                # answer evidence must be found in THAT representation
+    temperature: 0.0
+    gpu_memory_utilization: 0.85
+
+  decontam:
+    ngram: 13                             # 13-gram overlap (GPT-3 / OLMo practice) on normalised words
+    min_ngram_question: 8                 # short eval questions: 8-gram on the question text alone
+    eval_sets: [mmlu_pro_stem, sciq, pubmedqa_closed, mmlu, gsm8k, ifeval, gpqa_diamond, ws4_probe, ws3_items]
+
+  train:
+    models: [qwen3-4b, olmo3-7b]          # full profile; debug: profiles.debug.ws4_models
+    seeds: [0, 1, 2]                      # >= 3 seeds on the main conditions
+    formats: [doc, qa]                    # doc = continued training with replay; qa = instruction pairs (+ replay)
+    method: lora                          # same recipe and budget for every condition
+    lora: {r: 64, alpha: 128, dropout: 0.05, target_modules: all-linear}
+    lr: 1.0e-4
+    scheduler: cosine
+    warmup_ratio: 0.03
+    batch_tokens: 32768                   # per optimizer step (sequence length x per-device batch x grad accumulation)
+    epochs: 1                             # over the token-matched data -> equal steps per condition
+    max_steps: null                       # debug: profiles.debug.ws4_max_steps
+    bf16: true
+    gradient_checkpointing: true
+
+  grpo:                                   # RL variant: GRPO on verifiable QA generated from each representation
+    conditions: [summary, ku, full]
+    prompts_per_condition: null           # null = all pairs (same count for each condition)
+    context_chars: 6000                   # the pair's source representation is in the prompt (full text: window
+                                          #   around the evidence); closed-book RL on unseen papers gives ~0 reward
+    num_generations: 8
+    max_completion_length: 128
+    lr: 5.0e-6
+    beta: 0.0                             # no KL term (DAPO / Dr.GRPO practice)
+    loss_type: dr_grpo
+    reward: answer_match                  # normalised exact match or numeric tolerance (qa.exact_match) -> 1 / 0
+    max_steps: 300
+
+  tools:                                  # RL for tool use (Search-R1 style): learn to use the Alexandria skill
+    enabled: true
+    train_sources: [ws4_qa_ku, sciq_train, pubmedqa_artificial]   # never HLE / GPQA
+    tools: [search, get_paper]
+    max_tool_calls: 4
+    num_generations: 8
+    lr: 5.0e-6
+    max_steps: 300
+
+  eval:
+    # pushing models (main claim): closed book, general science, not tied to the trained papers
+    science: [gpqa_diamond, mmlu_pro_stem, sciq, pubmedqa_closed, hle_text]
+    # forgetting: general capabilities
+    general: [mmlu, gsm8k, ifeval]
+    knowledge: true                       # closed-book probe questions on trained vs held-out papers
+    limit: null                           # lm-eval --limit per task (debug: profiles.debug.ws4_eval_limit)
+    num_fewshot: 0
+    max_model_len: 4096
+    gpu_memory_utilization: 0.85
+    judge: qwen3-8b                       # SimpleQA judge for the knowledge probe
+
+  results:
+    n_boot: 2000
+
+  pretraining:                            # Option B (compute permitting): frontload KU data into pretraining
+    enabled: false                        # not implemented here: needs the open-sci-ref 1.7B setup (see README)
+
+# downloads for `alexandria fetch-ws4` (login node); revisions pinned at first download
+ws4_resources:
+  fineweb-edu: {repo: HuggingFaceFW/fineweb-edu, files: ["sample/10BT/000_00000.parquet"], kind: docs, text: text}
+  fineweb-edu-generic: {repo: HuggingFaceFW/fineweb-edu, files: ["sample/10BT/001_00000.parquet"], kind: docs,
+                        text: text, min_int_score: 4}
+  tulu3: {repo: allenai/tulu-3-sft-mixture, files: ["data/train-00000-of-00006.parquet"], kind: chat}
+  webinstruct: {repo: TIGER-Lab/WebInstructSub, files: ["data/train-00000-of-00013.parquet"], kind: qa,
+                question: question, answer: answer}
+  sciq_train: {repo: allenai/sciq, files: ["data/train-00000-of-00001.parquet"], kind: qa, question: question,
+               answer: correct_answer}
+  pubmedqa_artificial: {repo: qiaojin/PubMedQA, files: ["pqa_artificial/train-00000-of-00001.parquet"], kind: qa,
+                        question: question, answer: final_decision}

@@ -1,0 +1,60 @@
+# WS6: embeddings as direct input ("embeddings alone"; P2, optional). The extreme-compression point: a paper's KU
+# embedding (gte-modernbert, 768-d, full precision) is projected into k "knowledge tokens" for a frozen LLM
+# (xRAG-style, Cheng et al. 2024; cf. ICAE, Ge et al. 2024; gist tokens, Mu et al. 2023).
+#   alexandria ws6 train-projector --profile debug --set 'ws6.projector.k=[1,4]'
+
+profiles:
+  # debug: small real-data test (0.5B LLM, 48 + 12 projector papers, ~100 steps per stage)
+  debug: {ws6_train_papers: 48, ws6_dev_papers: 12, ws6_llm: qwen2.5-0.5b, ws6_k: [1, 4], ws6_recon_steps: 60,
+          ws6_qa_steps: 120, ws6_ws3_items: 100}
+  full: {}
+
+ws6:
+  papers:                                 # projector training papers, split BY PAPER; never WS2 / WS3 eval papers
+    n_train: 3000
+    n_dev: 300
+    seed: 0
+    strata: [domain]
+    min_source_chars: 5000
+
+  qa:                                     # QA pairs about the projector papers, generated from their KU prose
+    generator: qwen3-8b
+    pairs_per_paper: 8
+    generate_per_paper: 12
+    max_source_tokens: 12000
+    max_tokens: 3000
+    min_evidence_match: 85
+    temperature: 0.0
+    gpu_memory_utilization: 0.85
+
+  embed:
+    embedder: gte-modernbert              # the dataset's search-index embedder; re-embedded at full precision (fp32)
+    max_length: 8192
+    batch_size: 16
+
+  projector:
+    llm: qwen2.5-7b                       # frozen; debug: profiles.debug.ws6_llm
+    k: [1, 4, 16]                         # knowledge tokens per paper (one projector per k)
+    hidden: 2048                          # 2-layer MLP 768 -> hidden -> k x d_model
+    recon_steps: 1000                     # stage 1: reconstruct the KU's executive summary from its embedding
+    qa_steps: 2000                        # stage 2: answer QA pairs from the embedding
+    recon_tokens: 128                     # target length of the reconstruction objective
+    batch_size: 16
+    lr: 1.0e-4
+    warmup_steps: 20
+    seed: 0
+    eval_every: 50                        # dev loss every N steps
+
+  eval:
+    max_new_tokens: 48
+    batch_size: 32
+    ku_text_max_tokens: 6000              # the KU-text arm (text upper point on the same axis)
+    retrieve_k: 3                         # WS3 arm EMB: top-3 papers by gte-modernbert cosine -> 3 x k tokens
+    ws3_items: null                       # qabench-open items (debug: profiles.debug.ws6_ws3_items)
+
+  grade:
+    judge: qwen3-8b
+    gpu_memory_utilization: 0.85
+
+  results:
+    n_boot: 2000

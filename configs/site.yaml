@@ -16,6 +16,7 @@ llm:                                                                # global ove
 envs:
   main: ${store}/envs/Alex                                          # conda activate Alex
   llm: ${store}/envs/Alex-vllm                                      # conda activate Alex-vllm (vLLM; judge + MiniCheck)
+  train: ${store}/envs/Alex-train                                   # Alex-vllm + TRL, PEFT, lm-eval (WS4 training / eval)
 
 slurm:
   account: kisski-l3s-llm4sci
