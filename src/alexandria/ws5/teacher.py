@@ -145,12 +145,17 @@ def run_teacher(ctx: Context) -> dict:
     if provider == "anthropic":
         rows, name = _anthropic_batch(ctx, cfg, items), cfg.get("model", "claude-opus-5-5")
     else:
-        spec = model_spec(ctx.cfg, cfg.get("local_model", "qwen3.5-27b"))
+        spec = model_spec(ctx.cfg, setting(ctx, "teacher_model", cfg.get("local_model", "qwen3.5-27b")))
+        cfg = {**cfg, "source_tokens": setting(ctx, "teacher_source_tokens", cfg.get("source_tokens", 32000)),
+               "out_tokens": setting(ctx, "teacher_out_tokens", cfg.get("out_tokens", 6000))}
+        extra = dict(cfg.get("vllm_kwargs") or {})
         if cfg.get("cpu_offload_gb"):          # weights that do not fit the GPU slice live in CPU memory (slower)
-            spec = {**spec, "vllm_kwargs": {**(spec.get("vllm_kwargs") or {}), "cpu_offload_gb": float(cfg["cpu_offload_gb"])}}
+            extra["cpu_offload_gb"] = float(cfg["cpu_offload_gb"])
+        spec = {**spec, "vllm_kwargs": {**(spec.get("vllm_kwargs") or {}), **extra}}
         log(f"teacher: {spec['name']} ({spec['hf']}, licence {spec.get('license', '?')}) for {len(items)} papers"
             + (f", {cfg['cpu_offload_gb']} GB offloaded to CPU" if cfg.get("cpu_offload_gb") else ""))
-        rows = with_model(spec, _vllm_teacher, items, cfg, gpu_memory_utilization=float(cfg.get("gpu_memory_utilization", 0.85)))
+        rows = with_model(spec, _vllm_teacher, items, cfg, gpu_memory_utilization=float(
+            setting(ctx, "teacher_gpu_memory", cfg.get("gpu_memory_utilization", 0.85))))
         name = spec["name"]
     df = pd.DataFrame(rows).merge(papers[["paper_key", "split"]], on="paper_key")
     df["teacher"] = name

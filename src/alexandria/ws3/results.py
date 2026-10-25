@@ -154,6 +154,9 @@ def run_results(ctx: Context) -> dict:
     acc.to_csv(ctx.out / "accuracy.csv", index=False)
     cmp.to_csv(ctx.out / "comparisons.csv", index=False)
     flips.to_csv(ctx.out / "flips.csv", index=False)
+    breakdown = gains_by(ctx, per[~per["bench"].str.endswith("[gold in corpus]")])
+    for key, tbl_ in breakdown.items():
+        tbl_.to_csv(ctx.out / f"gains_by_{key}.csv", index=False)
     main = acc.pivot_table(index=["bench", "arm"], columns="model", values="mean")
     (ctx.out / "main_table.tex").write_text(main.map(lambda v: f"{v:.1%}" if pd.notna(v) else "–").to_latex(escape=True))
 
@@ -192,6 +195,14 @@ def run_results(ctx: Context) -> dict:
                        "series": [{"name": m, **{k: t[t["model"] == m].set_index("arm").reindex(
                            [a for a in arm_order if a in set(t["arm"])])[c].tolist() for k, c in
                            (("data", "mean"), ("lo", "lo"), ("hi", "hi"))}} for m in models]})
+    for key, tbl_ in breakdown.items():
+        panels.append({"type": "table", "title": f"Gains by {key}: Δ accuracy vs the model alone (A0), all models pooled",
+                       "hint": "discipline / language of the item's gold paper (WS1 features); items without a linked paper "
+                               "use their benchmark's field; small groups are noisy",
+                       "columns": [{"key": key, "label": key}, {"key": "arm", "label": "arm"},
+                                   {"key": "items", "label": "items", "fmt": "int"}, {"key": "acc", "label": "accuracy", "fmt": "pct1"},
+                                   {"key": "delta_vs_A0", "label": "Δ vs A0", "fmt": "pct1"}],
+                       "rows": tbl_.to_dict("records"), "limit": 200})
     panels += [
         {"type": "table", "title": f"Tool-call reliability without constrained decoding (pilot; gate {gate:.0%})",
          "hint": "the agent arms decode JSON actions constrained to the tool schema, so a FAIL model still runs; "
@@ -224,3 +235,30 @@ def run_results(ctx: Context) -> dict:
     ctx.publish("WS3 results: knowledge skill on benchmarks", panels,
                 summary=f"{acc['bench'].nunique()} benchmarks x {acc['arm'].nunique()} arms x {acc['model'].nunique()} models")
     return {"rows": len(acc)}
+
+
+BENCH_FIELD = {"pubmedqa": "Biomedical (PubMedQA)", "scifact": "Biomedical (SciFact)", "litqa2": "Biology (LitQA2)",
+               "gpqa": "Science (GPQA)", "hle": "Mixed (HLE)", "hle-gold": "Biology / chemistry (HLE-gold)"}
+
+
+def gains_by(ctx: Context, per: pd.DataFrame) -> dict[str, pd.DataFrame]:
+    """Accuracy per arm and Δ vs A0 by the discipline and the language of each item's gold paper (P2)."""
+    from ..ws1.faith.common import features_table, paper_key
+    items = pd.read_parquet(ctx.cfg.stage_dir("ws3", "benchmarks") / "items.parquet", columns=["bench", "item_id", "gold_paper_key"])
+    try:
+        f = features_table(ctx, ["file", "row", "domain", "oa_language", "summary_lang"])
+        f["paper_key"] = [paper_key(a, b) for a, b in zip(f["file"], f["row"], strict=True)]
+        f["lang"] = f["oa_language"].fillna(f["summary_lang"])     # OpenAlex language, else the summary's language
+        meta = f.set_index("paper_key")[["domain", "lang"]]
+    except FileNotFoundError:                                         # no WS1 features: benchmark fields only
+        meta = pd.DataFrame(columns=["domain", "lang"])
+    items["discipline"] = items["gold_paper_key"].map(meta["domain"]).fillna(items["bench"].map(BENCH_FIELD)).fillna("unknown")
+    items["language"] = items["gold_paper_key"].map(meta["lang"]).fillna("unknown (no linked paper)")
+    d = per.merge(items[["item_id", "discipline", "language"]], on="item_id", how="left")
+    out = {}
+    for key, col in (("discipline", "discipline"), ("language", "language")):
+        g = d.groupby([col, "arm"]).agg(items=("item_id", "nunique"), acc=("correct", "mean")).reset_index()
+        base = g[g["arm"] == "A0"].set_index(col)["acc"]
+        g["delta_vs_A0"] = g["acc"] - g[col].map(base)
+        out[key] = g.rename(columns={col: key}).sort_values([key, "arm"])
+    return out

@@ -200,6 +200,9 @@ def run_generate(ctx: Context) -> dict:
         if s["kind"] == "released":
             rows, sec = _released(ctx, test), None
         elif s["kind"] == "teacher":
+            if not (ctx.cfg.stage_dir("ws5", "teacher") / "teacher.parquet").exists():
+                skipped[s["system"]] = "teacher not run yet"           # baselines can be scored without it
+                continue
             t = stage_table(ctx, "teacher", "teacher.parquet")
             t = t[t["split"] == "test"]
             rows = t[["paper_key", "text", "tokens_out"]].to_dict("records")
