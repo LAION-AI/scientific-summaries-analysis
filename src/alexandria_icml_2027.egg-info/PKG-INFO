@@ -36,10 +36,12 @@ summary, plus OpenAlex metadata and, for ~5.3M papers, the full text. One workst
 | **WS2** | Given the paper, how much of what a reader needs does the KU keep, compared with the full text, at what token cost? (fidelity / retention, gold paper given) | `alexandria.ws2` | `configs/ws2.yaml` |
 | **WS3** | Without the paper, does access to the KU corpus through a retrieval skill help models on scientific benchmarks? (usefulness, open corpus) | `alexandria.ws3`, `alexandria.skill` | `configs/ws3.yaml` |
 | **WS4** | Are KU-derived data a good **training** signal that pushes models (post-training: SFT, GRPO, tool-use RL), compared with full papers and controls? | `alexandria.ws4` | `configs/ws4.yaml` |
+| **WS5** | Can a 9-12B student distilled from teacher KUs (open-weight Qwen3.5-27B; optionally Claude Opus 5.5) match the teacher at a fraction of the cost, on disjoint papers? | `alexandria.ws5` | `configs/ws5.yaml` |
+| **WS6** | Extreme compression: can a projected KU embedding (a few "knowledge tokens") replace the text? (P2, optional) | `alexandria.ws6` | `configs/ws6.yaml` |
 
 Contents: [Layout](#repository-layout) · [Setup](#setup-once) · [How stages run](#how-stages-run) ·
 [Dashboard](#dashboard) · [WS1](#ws1-data-quality-description-and-faithfulness) · [WS2](#ws2-representation-comparison-on-the-qa-bench) ·
-[WS3](#ws3-benchmarks-via-the-alexandria-knowledge-skill) · [WS4](#ws4-training-signal-study-post-training-first) · [ICML run protocol](#icml-run-protocol-debug--full) ·
+[WS3](#ws3-benchmarks-via-the-alexandria-knowledge-skill) · [WS4](#ws4-training-signal-study-post-training-first) · [WS5](#ws5-teacher-distillation) · [WS6](#ws6-embeddings-as-input) · [ICML run protocol](#icml-run-protocol-debug--full) ·
 [Threats to validity](#threats-to-validity-and-open-items) · [Datasets](#datasets-run-on-any-data) · [Data notes](#data-notes)
 
 ## Repository layout
@@ -294,8 +296,8 @@ accuracy (SciFact, PubMedQA), and on LitQA2 the retrieval arms choose "Insuffici
 |---|---|---|
 | `sft-doc` | continued training (causal LM) with replay (25% FineWeb-Edu tokens) | `data` stage corpora |
 | `sft-qa` | instruction pairs, loss on answers only, with Tulu-3 replay (25%) | `qa-data` pairs (same generator, same count per paper) |
-| `grpo` | GRPO (Shao et al., 2024), Dr.GRPO loss, no KL, 8 generations, reward = answer match | the condition's verifiable QA pairs as prompts |
-| `tools` | GRPO with the Alexandria skill as tools (`search`, `get_paper`; Search-R1 style, Jin et al., 2025) | generated KU questions + SciQ train + PubMedQA artificial; **never HLE / GPQA** |
+| `grpo` | GRPO (Shao et al., 2024), Dr.GRPO loss, no KL, 8 generations, reward = answer match (normalised exact / numeric, or a short answer containing the gold) | the condition's verifiable QA pairs, each with the representation it was generated from in the prompt (full text: a 6k-character window around the evidence) |
+| `tools` | GRPO with the Alexandria skill as tools (`search`, `get_paper`; Search-R1 style, Jin et al., 2025; TRL native tool calling) | generated KU questions + SciQ train + PubMedQA artificial, equal share per source; **never HLE / GPQA** |
 
 | stage | GPU | env | what |
 |---|---|---|---|
@@ -323,11 +325,82 @@ bash slurm/ws4_debug.sh                                         # tiny real-data
 PROFILE=full bash slurm/ws4_debug.sh                            # full: qwen3-4b + olmo3-7b, 3 seeds, 3g.40gb slices
 ```
 
+**Design decisions forced by the debug run (2026-10-23, Qwen2.5-0.5B, 24 + 12 papers, 30 steps):**
+* Closed-book GRPO on questions about unseen papers gave reward 0 in every group (no learning signal); with the
+  source representation in the prompt, rewards start at 0.45-0.56 (KU / summary) and ~0.03 (full-text windows).
+* Tool RL with the public splits in their natural proportions (31.8k prompts, 134 paper questions) learned to stop
+  calling tools (call rate 0.75 -> 0); sources are now sampled in equal shares. Tool use still decays at 0.5B / 30
+  steps: the real test needs the 4-7B models and longer runs.
+* Decontamination against the probe removes more `full`-text pairs (40) than KU pairs (7-14), because probe questions
+  are written from the full text; the QA files are re-equalised per paper afterwards (134 pairs per condition).
+* lm-eval gets the local snapshot directory (offline nodes); MMLU-Pro is scored with `exact_match,custom-extract`,
+  GSM8K with flexible extraction (strict-match is 0 for chat models), IFEval prompt-level strict.
+* Closed-book PubMedQA is below chance for the 0.5B base model (8%: it answers "maybe"); expected without the abstract.
+* The tool-RL adapter is evaluated closed book like every other run; its real test is WS3 with tools (to add).
+
 **Option B (frontloading into pretraining)** is not implemented (`ws4.pretraining.enabled: false`): it needs the
 open-sci-ref 1.7B setup. If run: >= 3 seeds; small-scale metrics (MMLU / ARC cloze, SciQ, bits-per-byte on held-out
 papers); controls with the same papers as raw text vs KUs, plain-prose LLM summaries, FineWeb-Edu, token-matched;
 decontaminated KU corpus; state from-scratch vs continued; explain BoolQ below chance; no TinyLlama / Llama-3.2
 comparisons.
+
+## WS5: teacher distillation
+
+**Question.** If a 9-12B student (Qwen3.5-9B, Gemma-4-12B; official BF16 weights) distilled from 1-2k teacher KUs
+gets close to the teacher at a fraction of the cost, regenerating or KU-extracting large subsets becomes feasible
+(D2) and a "v3" of the dataset becomes realistic. A KU here is the release's 18-field structured summary, as JSON.
+
+| stage | GPU | env | what |
+|---|---|---|---|
+| `papers` | | main | open-access papers only (permissive sources such as arXiv, or OpenAlex OA) so teacher outputs can be released; stratified by discipline; split **by paper** into train / dev / test (asserted disjoint); `holdout_domains` disciplines appear in test only |
+| `teacher` | yes (40 GB) | llm | teacher KUs for every paper. Default `provider: vllm`: **Qwen3.5-27B-FP8** (open weights, Apache-2.0, so its outputs may train other models and be released; no API key), the largest model that fits one 40 GB MIG slice: official FP8 (31 GB), hybrid linear / full attention so a whole paper (32k tokens) fits; thinking off, the 18-field JSON schema as structured output. Optional `provider: anthropic`: Claude Opus 5.5 via the Message Batches API on a login node (key needed; refuses more than `compliance.max_unreviewed_requests` requests until `compliance.terms_checked: true`) |
+| `validate` | | main | gates before training: WS1 schema validation (`load_summary`, required fields, no extra keys), verbatim gate (fail at a >= 12-word span copied from the paper), human spot-check packet (`spot_check.csv` / `.md`, 50 random train KUs) |
+| `train` | yes | train | LoRA vs full SFT per student at learning-curve sizes 250 / 500 / 1k / 2k (nested subsets); prompt = summariser prompt + paper, completion = teacher KU, loss on the completion |
+| `generate` | yes | train | every system writes every test paper's KU with the same prompt and schema (vLLM structured output), timed: students zero-shot, distilled students, released v2.0 KU, the 27B-class extractor (`gemma4-31b`, when it fits), teacher (ceiling) |
+| `mcq` | yes | llm | coverage MCQs from the test papers' full text (WS2 protocol; evidence-checked) |
+| `judge` | yes | llm | faithfulness: claims + key-result sentences of each KU vs the paper, judge from a third family (Granite-3.3-8B): SUPPORTED / NOT_SUPPORTED / CONTRADICTED |
+| `answer` | yes | llm | coverage: Phi-4-mini (another family) answers the MCQs from each KU only; `closed_book` is the floor |
+| `results` | | main | per system: schema validity, faithfulness, coverage (95% CI resampling papers; held-out disciplines separately), verbatim overlap (longest copied span, copied 8-gram share: must not rise with distillation), tokens per paper, papers per GPU-hour; learning curves vs teacher (dashed) and released v2.0 (dotted) |
+
+```bash
+bash slurm/ws5_debug.sh                                  # debug: teacher Qwen3.5-27B, Qwen2.5-0.5B student
+PROFILE=full TRAIN_GRES=gpu:3g.40gb:1 bash slurm/ws5_debug.sh   # full: 2k / 200 / 1.5k papers, Qwen3.5-9B + Gemma-4-12B
+```
+
+**Compliance:** the default teacher is Apache-2.0, so training on and releasing its outputs (CC-BY) is allowed. Only the
+optional Claude teacher needs the terms check (`ws5.compliance.terms_checked: true`). Larger open teachers
+(Qwen3.5-122B-A10B, gpt-oss-120b, Mistral-Small-4-119B) need more than one 40 GB slice, which our partitions do not offer.
+**GPU queue:** the teacher needs a 3g.40gb slice; these are scarce on Grete (2026-10-24: 16 jobs queued for ~8
+slices), so plan for queue time. The official Int4 build is no smaller (30 GB) and does not fit a 20 GB slice.
+**Downstream check (next):** plug the student KUs into the WS2 arms (`ku_raw` / `ku_clean` from a different source)
+and the WS3 index; the `mcq` + `answer` stages already apply the WS2 protocol on the WS5 test papers.
+**Open items:** the full-run students are multimodal checkpoints (`Qwen3_5ForConditionalGeneration`,
+`Gemma4Unified...`) used text-only: their training path needs a check before the full run; the 27B extractor
+(`gemma4-31b`) needs a 40 GB+ slice.
+
+## WS6: embeddings as input
+
+**Question (P2, optional).** The extreme-compression point: can a paper's KU embedding, projected into k
+"knowledge tokens" for a frozen LLM, replace its text? xRAG-style (Cheng et al., 2024); cf. ICAE (Ge et al., 2024)
+and gist tokens (Mu et al., 2023).
+
+| stage | GPU | env | what |
+|---|---|---|---|
+| `papers` | | main | projector train / dev papers, split by paper; WS2 eval and WS3 gold papers excluded (the test side) |
+| `qa` | yes | llm | QA pairs from each paper's KU prose (WS4 generator and checks) |
+| `embed` | yes | main | gte-modernbert (768-d, CLS, fp32, L2-normalised) for projector papers, WS2 papers, the WS3 corpus and queries; re-embedded because the released FAISS indices store lossy PQ48 codes |
+| `train-projector` | yes | train | per k: 2-layer MLP 768 -> k x d_model, LLM frozen; phase 1 reconstructs the executive summary, phase 2 QA; dev loss and dev QA match |
+| `eval` | yes | train | WS2 questions: closed book, k knowledge tokens, KU as text (WS2 answer prompt); WS3 arm EMB: top-3 papers by cosine -> 3 x k tokens, gold-retrieved rate |
+| `grade` / `results` / `report` | | | SimpleQA judge + EM / F1; accuracy with paper-clustered bootstrap CIs vs tokens per paper (log axis); paired Δ vs closed book and KU text |
+
+```bash
+bash slurm/ws6_debug.sh                                            # debug: 0.5B LLM, 48 + 12 papers, k in {1, 4}
+PROFILE=full TRAIN_GRES=gpu:3g.40gb:1 KS=3 bash slurm/ws6_debug.sh  # Qwen2.5-7B, k in {1, 4, 16}
+```
+
+**Debug result (2026-10-23):** closed book 2.4%, 1 token 4.3%, 4 tokens 5.0%, KU text (~2.7k tokens) 42.1%; the
+projector learned the answer format, not the content (dev QA match 2%). The real test needs the 7B LLM and the full
+training set. The WS3 EMB arm retrieves with gte-modernbert only (gold paper found 81%), not the WS3 hybrid index.
 
 ## ICML run protocol (debug -> full)
 
