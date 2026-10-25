@@ -226,3 +226,17 @@ def test_skip_status(tmp_path):
     spec = StageSpec("ws1", "t-skip", lambda ctx: ctx.skip("T", "off"), "test")
     assert run_stage(Context(cfg, spec)) == 0
     assert json.loads((tmp_path / "debug" / "ws1" / "t-skip" / "manifest.json").read_text())["status"] == "skipped"
+
+
+def test_optout_list_drops_rows_and_keeps_release_row_numbers(tmp_path):
+    import pyarrow as pa
+
+    from alexandria.data import optout_ids, optout_mask
+    f = tmp_path / "optout.txt"
+    f.write_text("# takedown requests\n2401.00001\nhttps://doi.org/10.1234/ABC\n")
+    ids = optout_ids(str(f))
+    assert ids == {"2401.00001", "10.1234/abc"}
+    tbl = pa.table({"paper_id": ["2401.00001", "2401.00002", "x"], "source_doi": [None, None, "10.1234/abc"],
+                    "_row": [0, 1, 2]})
+    kept = tbl.filter(optout_mask(tbl, ids))
+    assert kept["_row"].to_pylist() == [1]
