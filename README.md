@@ -16,7 +16,7 @@ summary, plus OpenAlex metadata and, for ~5.3M papers, the full text. One workst
 
 Contents: [Layout](#repository-layout) · [Setup](#setup-once) · [How stages run](#how-stages-run) ·
 [Dashboard](#dashboard) · [WS1](#ws1-data-quality-description-and-faithfulness) · [WS2](#ws2-representation-comparison-on-the-qa-bench) ·
-[WS3](#ws3-benchmarks-via-the-alexandria-knowledge-skill) · [WS4](#ws4-training-signal-study-post-training-first) · [WS5](#ws5-teacher-distillation) · [WS6](#ws6-embeddings-as-input) · [ICML run protocol](#icml-run-protocol-debug--full) ·
+[WS3](#ws3-benchmarks-via-the-alexandria-knowledge-skill) · [WS4](#ws4-training-signal-study-post-training-first) · [WS5](#ws5-teacher-distillation) · [WS6](#ws6-embeddings-as-input) · [X1](#x1-retrieval-evaluation-of-the-indices) · [X2](#x2-post-cutoff-benchmark) · [X3](#x3-comparison-with-existing-systems) · [S1](#s1-safety-checks-and-evaluation) · [ICML run protocol](#icml-run-protocol-debug--full) ·
 [Threats to validity](#threats-to-validity-and-open-items) · [Datasets](#datasets-run-on-any-data) · [Data notes](#data-notes)
 
 ## Repository layout
@@ -129,6 +129,8 @@ status and every stage's KPIs, tables, charts and figures; per-paper tables list
 | `calibrate` | reduce | judge, human-agreement | judge and MiniCheck vs human gold: kappa, confusion, AUC, threshold, isotonic map |
 | `abstract-support` | reduce | features | what abstract-only input can support of the long methods / results fields |
 | `datasheet` | reduce | describe, quality, reconcile, provenance, keys | Gebru et al. datasheet + Croissant RAI, from measured numbers |
+| `audit` | reduce | - | paper consistency audit (plan section 5), over the WHOLE local release for light columns: arXiv rows vs distinct arXiv ids, rows without an id, versions, cross-subset dedup method (KU-Fixes clusters by match keys; title-only = possible false positives), index arithmetic (PQ48 = 64x), real token statistics (summariser `summary_tokens_out` + per-field reference tokens), model sizes for the paper's tables, input type (full text vs abstract), what "sanitized" removes, chunk source, decontamination hits of summaries vs every eval set, a seeded random sample for the embedding plot, and a checklist of paper statements vs measured evidence (`paper_checklist.csv`) |
+| `licenses` | reduce (login node) | - | per-record licence from OpenAlex + arXiv OAI-PMH, classified (permissive / NC-ND / arXiv default / publisher / none), `fulltext_redistributable`, `cc_by_conflict` -> `licenses.parquet` |
 
 Methods: rates carry Wilson 95% intervals; per-paper length flags use a robust z-score of log(1 + words) against the
 delivered lengths of the same field and input type (Iglewicz & Hoaglin, |z| > 3.5); grounding follows MiniCheck
@@ -377,6 +379,237 @@ PROFILE=full TRAIN_GRES=gpu:3g.40gb:1 KS=3 bash slurm/ws6_debug.sh  # Qwen2.5-7B
 projector learned the answer format, not the content (dev QA match 2%). The real test needs the 7B LLM and the full
 training set. The WS3 EMB arm retrieves with gte-modernbert only (gold paper found 81%), not the WS3 hybrid index.
 
+## X1: retrieval evaluation of the indices
+
+**Question.** How well do the release's search indices find the gold paper, and why do the WS3 agents miss it? The
+release's FAISS indices store lossy PQ48 codes and are not local, so X1 rebuilds each index type the release offers on
+a benchmark corpus (linked gold papers + random release distractors) with the release's settings.
+
+| stage | GPU | what |
+|---|---|---|
+| `benchmarks` | | LitSearch, CiteME (gated: needs HF_TOKEN), SciFact; gold papers linked to release rows by DOI / exact title (`ws3.gold`) |
+| `corpus` | | gold papers + random release distractors; units per representation: summary fields, whole summary, claims, 500-word full-text chunks |
+| `index` | yes | per representation: bm25s, exact gte-modernbert vectors (flat), IVF-PQ48 (release settings) |
+| `search` | yes | every query x representation x retriever (BM25 / dense / dense PQ48 / RRF k=60): paper rankings, PQ48 loss vs flat, p50 / p95 latency, QPS |
+| `ws3-diagnosis` | yes | WS3 failures: gold-paper rank for the question vs the agents' own queries and k, on WS3's index |
+| `results` / `report` | | Recall@1/5/10/20/100, MRR, nDCG@10 with bootstrap CIs; PQ48 loss; latency; WS3 diagnosis |
+
+Run: `bash slurm/x1_debug.sh` (debug: <= 200 queries per benchmark, ~4k-paper corpus).
+**Debug (2026-10-24; LitSearch 200 queries, SciFact 26 linked, WS3 QA bench 100):** Recall@10 is highest for dense
+retrieval on chunks / fields (LitSearch 0.95-0.98) and RRF is never far behind; claims are the weakest representation.
+PQ48 costs up to 24 points of Recall@10 vs the exact index (WS3 QA bench, chunks) at ~10x the speed. WS3 diagnosis: the
+question itself finds the gold paper in the top 3 for 92% of items, but the agents search in only 65-82% of episodes
+(1st query: gold found 85-93%), which explains agents ~67% vs plain RAG 98%.
+
+## X2: post-cutoff benchmark
+
+**Question.** The cleanest test of WS3-H3: does the skill help when the model cannot know? Questions come from arXiv
+papers submitted on or after 2026-06-01, after the training cutoff / release of every evaluated model (table with
+sources in `configs/x2.yaml`). Scientific-Summaries' arXiv coverage ends in April 2026, so the new papers also
+demonstrate an incremental update.
+
+| stage | GPU | what |
+|---|---|---|
+| `papers` | login | arXiv API (3 s / request), monthly windows, round-robin over 10 primary categories; full text from arxiv.org/html (bibliography dropped); per-paper licence kept |
+| `summarize` | yes | KUs with the WS5 pipeline (prompt, 18-field schema, WS1 validation, verbatim gate); full: Qwen3.5-27B (40 GB), debug: Qwen3-8B |
+| `questions` | yes | gpt-oss-20b (a family used nowhere else) from the full text with the WS2 rules, evidence check and critic |
+| `verify` | | human-verification packet (`verify.csv` / `.md`); a filled `verify_filled.csv` adds the rates to the dashboard |
+| `index` | yes | WS3 index + the new papers' KU units and full-text chunks: BM25 rebuilt, dense vectors for new units only (incremental update) |
+| `eval` / `grade` / `results` | yes | WS3 harness arms A0 / R / F / S, 4 answer models; SimpleQA judge; paper-clustered CIs, Δ vs A0 (Holm), gold-paper retrieved |
+
+Run: `alexandria x2 papers --profile debug` on a login node, then `bash slurm/x2_debug.sh`; full:
+`PROFILE=full SUM_GRES=gpu:3g.40gb:1 bash slurm/x2_debug.sh` (~600 papers, 500-1,000 questions).
+**Debug (2026-10-24, 24 questions, 22 papers):** model alone 4-13%; plain RAG over the updated index 67-83% (+54 to +75
+points, p < 0.001); KU agent 13-38%, full-text agent 17-33%. Only 23% of generated questions pass all checks.
+
+## X3: comparison with existing systems
+
+**Question.** Alexandria vs PaperQA2 and OpenScholar on shared benchmarks. Every component is open-source and runs
+locally (no OpenAI or other external API).
+
+| stage | GPU | what |
+|---|---|---|
+| `items` | | LitQA2 and the WS3 QA bench (same item ids as WS3), ScholarQABench single-paper SciFact and PubMedQA (with gold contexts) |
+| `alexandria` | yes | WS3 harness arms A0 / R / S over the WS3 index, answer model qwen2.5-7b |
+| `pqa-corpus` / `paperqa` | yes | paper-qa 2026.8.12 (PaperQA2 pipeline) in the `Alex-pqa` venv over the WS3 corpus' full texts; the same qwen2.5-7b served by vLLM inside the job; all-MiniLM-L6-v2 + sparse embeddings; tiktoken BPE from a local cache; every other outbound connection blocked |
+| `openscholar` | yes | OpenScholar/Llama-3.1_OpenScholar-8B with its answer prompt; its 45M-paper datastore (0.74 TB) is not used, so: "OpenScholar-8B LM + Alexandria retrieval", plus gold-context (upper bound) and closed-book |
+| `grade` / `results` | | exact match for labels / letters (official for single-paper tasks and LitQA2), SimpleQA judge for short answers; CIs; LitQA2 precision on answered items |
+
+Run: `bash slurm/x3_debug.sh` (50 items per benchmark); full: `PROFILE=full bash slurm/x3_debug.sh`.
+**Debug (2026-10-24):** QA bench: OpenScholar-8B + Alexandria retrieval 70%, Alexandria R 54%, PaperQA2 42%. On
+ScholarQABench the gold papers are rarely in the corpus, so retrieval lowers accuracy and PaperQA2 mostly abstains;
+the gold-context upper bound is 78-80%.
+
+**Accuracy vs cost (Pareto).** Every X3 system stage logs its cost per question:
+
+| System | Logged per question |
+|---|---|
+| Alexandria | retrieved, prompt and generated tokens; GPU-seconds. For the R arm, retrieved tokens are estimated as its prompt minus the closed-book prompt. |
+| OpenScholar-8B | reference, prompt and generated tokens; batch GPU-seconds |
+| PaperQA2 | paper-qa token counts over all LLM calls (answer and evidence summaries); evidence tokens; query-phase GPU-seconds |
+
+Wall-clock time is the stage's total time divided by the number of questions.
+
+`x3 results` writes `pareto.csv` and `figures/x3_pareto.png`. The figure plots accuracy (the macro mean over the
+benchmarks that every compared system ran) against prompt + generated tokens per question, on a log axis. A system
+is marked Pareto-optimal when no other system is both cheaper and more accurate.
+
+To rerun only the stages whose cost fields changed: `SKIP="items pqa-corpus alexandria" bash slurm/x3_debug.sh`.
+
+## X5: knowledge conflict
+
+**Question.** Does the answer come from the retrieved KU or from the model's prior?
+
+**Items.** QA items whose gold paper is in a retrieval index:
+* WS2 questions, searched in the WS3 index;
+* X2 post-cutoff questions, searched in the X2 index.
+
+**Counterfactual edit.** The fact that carries the answer in the gold KU is edited:
+* Numbers are scaled by a rule.
+* For other answers, qwen3-8b proposes a plausible alternative and rewrites only the sentences that state the answer.
+* An edit is kept only if the new answer is stated, the old one is gone and something changed.
+
+**Conditions.** Each answer model (qwen2.5-7b, olmo3-7b) answers with the WS2 prompt under five conditions:
+* closed book;
+* original KU;
+* counterfactual KU;
+* R-arm retrieval with the original gold units;
+* R-arm retrieval with the edited gold units (in a copy of the results; the index is never modified).
+
+The SimpleQA judge grades every answer twice: against the original answer and against the counterfactual answer.
+
+**Stages.** items → counterfactual → answer (array, one task per model) → grade → results → report.
+
+**Run.** `bash slurm/x5_debug.sh`. Use `SKIP="items counterfactual"` to reuse those stages.
+
+**Outputs.**
+* `x5/results/rates.csv` and the figure `x5_conflict.png`.
+* Splits by prior (does the model know the answer closed book?) and by cutoff period.
+
+**Debug scale.** 150 + 24 items; 72 counterfactuals pass the check. The models follow the edited KU 71–76% of the
+time in context and 64–65% through retrieval.
+
+## X6: token and compute efficiency
+
+**Question.** How many tokens, GPU-seconds, dollars, watt-hours and FLOPs does a KU save compared with the full text?
+Every saving is reported together with accuracy.
+
+**Run.** `bash slurm/x6_debug.sh` runs inference and rag-budget (arrays over models), train-efficiency, storage, and
+results + report.
+
+**Stages.**
+* **`inference`** uses the WS2 bench. It measures:
+  * prompt and output tokens;
+  * time to first token, time per output token and end-to-end latency at batch 1;
+  * batched throughput;
+  * nvidia-smi power.
+
+  The full text is also cut to N tokens and graded, to give an accuracy-vs-tokens curve.
+* **`rag-budget`** measures accuracy against a retrieved-token budget of 500–8,000 tokens. It compares KU units with
+  full-text chunks, on WS3 and X2 questions.
+* **`train-efficiency`** runs LoRA knowledge injection on KU, summary and full-text documents at 0.25–2× the WS4
+  token budget. It reports probe accuracy against training tokens and GPU-seconds.
+* **`storage`** measures bytes, gzip bytes and tokens per paper, index size, and query latency.
+* **`results`** computes, with bootstrap CIs:
+  * accuracy per 1k tokens;
+  * GPU-seconds, dollars and watt-hours per 1,000 correct answers;
+  * KV-cache MB per request;
+  * iso-accuracy (how many tokens the full text needs to match the KU);
+  * the figure.
+
+**Cost assumptions** are in `configs/x6.yaml` (`x6.cost`): dollars per A100-hour, the MIG slice share and the TDP.
+Energy is an estimate, because MIG slices do not report their own power.
+
+**Needs.** ws2 grade, ws3 index and benchmarks, x2 index and questions, ws4 decontam and probe, x1.
+
+**Debug results.**
+* The clean KU uses 2.4× fewer prompt tokens and costs 2.7–3.5× less per correct answer.
+* It is 16–18 points less accurate than the full text.
+* At equal length it beats a full-text prefix by about 6 points.
+* For RAG, full-text chunks beat KU units at every budget.
+* Training shows no learning signal at debug scale.
+
+## S1: safety checks and evaluation
+
+**Question.** Is the dataset safe to release, and does the Alexandria skill make models less safe? Every output is
+counts, rates, categories and record ids; no flagged text is stored.
+
+| stage | GPU | what |
+|---|---|---|
+| `pii` | | PII in summaries (18 fields) and full text (emails, phones, Luhn-checked card numbers, SSNs, IPs, dates of birth, patient ids, addresses, social handles); author contacts expected in full text, any hit in a summary is a finding; spot-check packet |
+| `injection` | | prompt-injection-like text (override phrases, role / chat-template tags, tool-call JSON, invisible / bidi / tag characters) |
+| `retractions` | | retracted papers (OpenAlex) in the whole local release, the WS2-WS5 sets and the WS3 index |
+| `guard` | yes | Qwen3Guard-Gen-8B labels summaries (Safe / Controversial / Unsafe + categories); Granite Guardian 3.3 re-checks for agreement (kappa) |
+| `dual-use` | yes | topic-term prefilter (bio / chem / cyber / rad-nuc) + LLM judge of actionable procedural detail; review packet with ids only |
+| `injection-live` | yes | indirect prompt injection: a harmless canary instruction in retrieved text, WS3 arms R and S; share of answers that follow it |
+| `uplift` | yes | safety challenge: WMDP accuracy closed book vs Alexandria retrieval; Do-Not-Answer harmful / refused responses without vs with retrieved passages (Qwen3Guard response mode; responses not stored) |
+| `results` / `report` | | Wilson CIs, paired bootstrap deltas, release checklist (`safety_flags`, retraction flag, injection sanitisation) |
+
+Run: `bash slurm/s1_debug.sh`; full: `PROFILE=full bash slurm/s1_debug.sh`. Open models / data (download on a login
+node): Qwen3Guard-Gen-8B, granite-guardian-3.3-8b, cais/wmdp, LibrAI/do-not-answer. HarmBench, SORRY-Bench,
+WildJailbreak and Llama-Guard-4 are gated and not used.
+**Debug (2026-10-24, 480 records, 2 models):** PII in 0.6% of summaries; 0 Unsafe of 300 summaries; 0 actionable
+dual-use records; injected canary followed in at most 2.5% of episodes; 0.009% retracted records, none in project
+sets; no significant WMDP uplift from retrieval (-11 to +1 points); harmful Do-Not-Answer responses not raised
+(Qwen2.5: 4.0% -> 3.3%).
+
+## C1: regulatory and ethics compliance
+
+**Question.** Does the release meet the EU AI Act, the GDPR, EU copyright law on text and data mining, the EU
+Ethics Guidelines for Trustworthy AI (HLEG / ALTAI) and the international AI frameworks (Council of Europe AI
+Convention, OECD AI Principles, UNESCO Recommendation, NIST AI RMF)? What is still open before the release?
+C1 is an **evidence matrix, not legal advice**. Items marked *legal review* need a lawyer or the DPO, whatever
+the evidence says.
+
+**Stages** (CPU, seconds on debug):
+
+* **`evidence`** collects every measurement into one flat map (`evidence.json`).
+  * **Read from earlier stages:**
+    * S1: PII, guard, dual-use, injection and live injection, WMDP uplift.
+    * WS1: quality, licences, describe, provenance, datasheet / Croissant RAI.
+    * X6: compute.
+  * **Measured on the records:**
+    * **Health identifiers (GDPR Art. 9 proxy)** in PubMed KUs. Direct identifiers are record numbers, titled
+      names and exact dates of birth or admission. Quasi-identifiers are case reports giving an exact age and sex.
+    * **GDPR territorial scope:** the share of papers with an EU/EEA-affiliated author, from OpenAlex.
+    * **Coverage:** language and author-country coverage (AI Act Art. 10(2)(f), HLEG Req. 5).
+    * **Licences of shipped full text:** whether each record that ships `text_raw` has a permissive licence.
+  * **Repository documents:** checks that the DPIA, privacy notice, copyright policy and AI Office
+    training-data summary exist in `docs/`.
+  * A key that was not measured is left out and scores as `unknown`.
+* **`matrix`** scores each requirement in `configs/c1.yaml` (`c1.requirements`, 31 provisions).
+  * Status rules: `met` if all `met` conditions hold; else `partial` if all `partial` conditions hold; else `gap`.
+  * Writes `matrix.csv`, `matrix.json` and `compliance_table.tex` (the paper appendix).
+  * Publishes the headline KPIs, a status-by-framework chart and the list of open items with actions.
+* **`report`** builds the PDF.
+
+**Scope notes.**
+* AI Act Art. 10 is binding only for high-risk systems; C1 scores it as best practice.
+* The GPAI duties in Art. 53 and 55 fall on the model provider that trains on the data. The dataset supplies what
+  that provider needs: the copyright policy, the training-data summary and the documentation.
+
+**Run.**
+* `bash slurm/c1_debug.sh` (or `alexandria pipeline c1 evidence matrix report --profile debug`).
+* `PROFILE=full bash slurm/c1_debug.sh` after S1 and WS1 have run with `--profile full`.
+* Rerun C1 whenever S1, WS1 or X6 change.
+* To close a documentation gap, add the file under `docs/` and rerun; the matrix picks it up.
+* To add a framework, append requirements to `c1.requirements`.
+
+**Debug result (480 records): 15 met, 10 partial, 6 gaps.**
+* **Gaps:**
+  * No DPIA (GDPR Art. 6/89 lawful basis, Art. 35).
+  * No privacy notice (GDPR Art. 14).
+  * No copyright policy (DSM Art. 3).
+  * TDM reservations not checked (DSM Art. 4(3)).
+  * 87% of the shipped full texts have no permissive licence.
+* **Partial:**
+  * 0.6% of KUs contain PII.
+  * Licences found for 21% of records.
+  * The generation prompt is not published.
+  * 36% of records have at least one US author.
+  * 0.9% of records are non-English.
+  * The largest WMDP uplift is +1 pt.
+
 ## ICML run protocol (debug -> full)
 
 Order (each step only needs the previous ones; everything is restartable):
@@ -457,6 +690,10 @@ reason. `tests/test_any_dataset.py` runs the CPU pipeline on a synthetic dataset
 **Adding a workstream:** create `src/alexandria/wsN/` with `@stage("wsN", ...)` modules and a `report` via
 `register_report`, add `configs/wsN.yaml`, add `"wsN"` to `WORKSTREAMS` in `cli.py`; `alexandria wsN <stage>`,
 `submit`, `pipeline`, the dashboard and the PDF pick it up.
+
+**Opt-out / takedown.** `site.optout_file` (paper ids or DOIs, one per line) is applied when any stage reads the
+release (`alexandria.data.iter_batches`): listed rows are dropped from every derived file and index on the next build.
+The request process (acknowledge, verify, remove, publish) is in `docs/TAKEDOWN.md`.
 
 ## Data notes
 
