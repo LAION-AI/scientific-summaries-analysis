@@ -52,7 +52,9 @@ def run(ctx: Context) -> dict:
     cfg = ctx.section("ws2.answer")
     qs = load_stage_table(ctx, "questions", "questions.parquet")
     cx = load_stage_table(ctx, "contexts", "contexts.parquet")
-    arms = [a for a in cfg.get("arms", list(ARMS)) if a in ARMS]
+    have = set(cx["arm"])
+    arms = [a for a in cfg.get("arms", list(ARMS)) if a in ARMS and a in have]    # never answer a missing arm as ""
+    suffix = str(cfg.get("part_suffix") or "")          # e.g. "__ablation": new arms in their own part files
     by = {(r.paper_key, r.arm): r.context for r in cx.itertuples()}
     items = [{"qid": q.qid, "arm": a, "question": q.question, "context": by.get((q.paper_key, a), "")}
              for q in qs.itertuples() for a in arms]
@@ -61,7 +63,7 @@ def run(ctx: Context) -> dict:
     parts.mkdir(parents=True, exist_ok=True)
     done = []
     for name in models:
-        dst = parts / f"{name}.parquet"
+        dst = parts / f"{name}{suffix}.parquet"
         if dst.exists() and not ctx.force:
             log(f"answer: {name} already done")
             continue
@@ -88,6 +90,8 @@ def run_grade(ctx: Context) -> dict:
     ans = load_parts(ctx, "answer")
     if ans.empty:
         raise FileNotFoundError("ws2/answer has no parts; run `answer` first")
+    # parts may overlap (e.g. a full re-run plus an extra-arms run): one answer per (qid, arm, model, seed)
+    ans = ans.drop_duplicates(["qid", "arm", "model", "seed"], keep="last").reset_index(drop=True)
     qs = load_stage_table(ctx, "questions", "questions.parquet")[["qid", "question", "answer"]]
     df = ans.merge(qs, on="qid", how="left")
     judge = model_spec(ctx.cfg, cfg.get("judge", "qwen3-8b"))

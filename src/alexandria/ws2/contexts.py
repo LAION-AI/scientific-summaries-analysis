@@ -20,7 +20,7 @@ from ..data import fetch_records
 from ..qa import ngram_overlap
 from ..runtime import Context, stage
 from ..ws1.faith.common import source_text
-from .common import ARMS, load_stage_table, render_ku_clean, render_ku_raw
+from .common import ARMS, BASE_ARMS, ablation_texts, load_stage_table, render_ku_clean, render_ku_raw
 
 
 def reference_tokenizer(cfg, name: str):
@@ -48,6 +48,10 @@ def run(ctx: Context) -> dict:
     full_chars = int(cfg.get("full_text_chars", 30000))
     recs = fetch_records(ctx.cfg, list(zip(papers["file"], papers["row"], strict=True)),
                          ["paper_id", "text_raw", "text_sanitized"])
+    acfg = ctx.section("ws2.ablation")
+    ablate = bool(acfg.get("enabled", True))
+    gen_p = ctx.cfg.stage_dir("ws2", "ablation-gen") / "generated.parquet"
+    gen = pd.read_parquet(gen_p).set_index("paper_key") if ablate and gen_p.exists() else None
     rows = []
     for p in papers.itertuples():
         rec = recs.get((p.file, int(p.row))) or {}
@@ -58,7 +62,12 @@ def run(ctx: Context) -> dict:
                  "ku_clean": clean}
         _, n_clean = cut_tokens(tok, clean, cap)
         texts["full_text_matched"], _ = cut_tokens(tok, src, max(n_clean, 1))
-        for arm in ARMS:
+        if ablate:                                     # structure ablation (common.ABLATION_GROUPS, ablation-gen)
+            texts.update(ablation_texts(json.loads(ku["ku_fixed"]), seed=int(acfg.get("seed", 0)) + p.Index))
+            if gen is not None and p.paper_key in gen.index and gen.at[p.paper_key, "ku_tokens"] > 0:
+                texts["ku_local"] = gen.at[p.paper_key, "ku_text"]
+                texts["prose_local"] = gen.at[p.paper_key, "prose_text"]
+        for arm in [a for a in ARMS if a in texts]:
             t, n = cut_tokens(tok, texts[arm], cap)
             rows.append({"paper_key": p.paper_key, "arm": arm, "context": t, "tokens": n, "chars": len(t),
                          "capped": n >= cap and arm != "closed_book",
@@ -70,15 +79,16 @@ def run(ctx: Context) -> dict:
         qs = load_stage_table(ctx, "questions", "questions.parquet")
         by = {(r.paper_key, r.arm): r.context for r in df.itertuples()}
         ov = [{"qid": q.qid, "arm": arm, "overlap5": ngram_overlap(q.question, by.get((q.paper_key, arm), ""))}
-              for q in qs.itertuples() for arm in ARMS if arm != "closed_book"]
+              for q in qs.itertuples() for arm in BASE_ARMS if arm != "closed_book"]
         pd.DataFrame(ov).to_parquet(ctx.out / "question_overlap.parquet", index=False)
         ov_tbl = pd.DataFrame(ov).groupby("arm")["overlap5"].mean().reindex([a for a in ARMS if a != "closed_book"])
     except FileNotFoundError:
         ov_tbl = pd.Series(dtype=float)
-    tok_tbl = df.groupby("arm")["tokens"].describe(percentiles=[.5]).reindex(list(ARMS))
+    present = [a for a in ARMS if a in set(df["arm"])]
+    tok_tbl = df.groupby("arm")["tokens"].describe(percentiles=[.5]).reindex(present)
     src_tok = df[df["arm"] == "full_text"].set_index("paper_key")["tokens"]
     rows_tbl = []
-    for arm in ARMS:
+    for arm in present:
         t = df[df["arm"] == arm].set_index("paper_key")["tokens"]
         rows_tbl.append({"arm": arm, "what": ARMS[arm], "median_tokens": float(tok_tbl.loc[arm, "50%"]),
                          "mean_tokens": float(tok_tbl.loc[arm, "mean"]),
@@ -97,5 +107,5 @@ def run(ctx: Context) -> dict:
                      {"key": "question_overlap", "label": "question overlap", "fmt": "pct1"}], "rows": rows_tbl},
         {"type": "bar", "title": "Median context tokens per arm", "fmt": "int", "horizontal": True,
          "labels": [r["arm"] for r in rows_tbl], "series": [{"name": "tokens", "data": [r["median_tokens"] for r in rows_tbl]}]},
-    ], summary=f"{len(papers)} papers x {len(ARMS)} arms")
-    return {"papers": len(papers), "arms": len(ARMS)}
+    ], summary=f"{len(papers)} papers x {len(present)} arms")
+    return {"papers": len(papers), "arms": len(present)}

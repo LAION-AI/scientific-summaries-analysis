@@ -22,6 +22,9 @@ from ..runtime import Context, stage
 from ..stats import cluster_bootstrap, holm, paired_difference
 from .common import ARMS, load_stage_table
 
+# arms on the accuracy-vs-tokens figure (the field ablations have their own panel)
+FIGURE_ARMS = ["full_text", "full_text_matched", "ku_raw", "ku_clean", "ku_local", "prose_local"]
+
 
 def per_question(g: pd.DataFrame) -> pd.DataFrame:
     """Average over seeds: one row per (model, arm, qid)."""
@@ -101,6 +104,9 @@ def run(ctx: Context) -> dict:
                 clean_rows.append({"model": m, "papers": "WS1-flagged" if flagged else "not flagged",
                                    "questions": int((sub["model"] == m).sum() / max(len(arms), 1)), **d})
     fl = flips(pq)
+    abl = ablation_table(pq, tbl, boot, cx, models, n_boot)
+    if len(abl):
+        abl.to_csv(ctx.out / "ablation.csv", index=False)
 
     # lexical-bias covariate: full_text accuracy by question/context overlap tercile
     try:
@@ -125,7 +131,7 @@ def run(ctx: Context) -> dict:
     style()
     fig, ax = plt.subplots(figsize=(6.4, 3.8))
     for m in models:
-        t = tbl[(tbl["model"] == m) & (tbl["arm"] != "closed_book")].sort_values("median_tokens")
+        t = tbl[(tbl["model"] == m) & tbl["arm"].isin(FIGURE_ARMS)].sort_values("median_tokens")
         ax.errorbar(t["median_tokens"], t["mean"], yerr=[t["mean"] - t["lo"], t["hi"] - t["mean"]], marker="o",
                     capsize=2, lw=1, label=m)
         for r in t.itertuples():
@@ -194,6 +200,7 @@ def run(ctx: Context) -> dict:
          "labels": [str(c) for c in by_type.columns],
          "series": [{"name": a, "data": [None if np.isnan(v) else float(v) for v in by_type.loc[a].tolist()]}
                     for a in arms]},
+        *(ablation_panels(abl) if len(abl) else []),
         *([{"type": "table", "title": "Lexical bias check: full-text accuracy by question/context overlap",
             "hint": "if accuracy rises with overlap, question wording favours the full-text arm",
             "columns": [{"key": "model", "label": "model"}, {"key": "overlap_tercile", "label": "overlap"},
@@ -202,3 +209,83 @@ def run(ctx: Context) -> dict:
     ], summary=f"{pq['qid'].nunique()} questions x {len(arms)} arms x {len(models)} models")
     return {"questions": int(pq["qid"].nunique()), "models": models,
             "accuracy": {f"{r.model}/{r.arm}": round(r.mean, 4) for r in tbl.itertuples()}}
+
+
+# ---------------------------------------------------------------- structure ablation
+ABLATION_COMPARISONS = [   # (arm, reference, what it tests)
+    ("ku_local", "prose_local", "structure: same model, same source, same length (KU vs prose)"),
+    ("ku_clean", "ku_flat", "structure: same content, headings and field order removed"),
+    ("ku_minus_context", "ku_clean", "drop context fields"),
+    ("ku_minus_methods", "ku_clean", "drop methods fields"),
+    ("ku_minus_results", "ku_clean", "drop results fields"),
+    ("ku_minus_claims", "ku_clean", "drop claims"),
+    ("ku_minus_limitations", "ku_clean", "drop limitations"),
+    ("ku_minus_takeaways", "ku_clean", "drop take-aways"),
+    ("ku_results_claims", "ku_clean", "keep only results + claims"),
+]
+
+
+def ablation_table(pq: pd.DataFrame, tbl: pd.DataFrame, boot: dict, cx: pd.DataFrame, models: list[str],
+                   n_boot: int) -> pd.DataFrame:
+    """Paired differences for the structure ablation, per model and pooled over models (questions averaged over
+    models first), with paper-clustered bootstrap CIs and Holm over every row; median tokens of both arms."""
+    have = set(pq["arm"])
+    comps = [c for c in ABLATION_COMPARISONS if c[0] in have and c[1] in have]
+    if not comps:
+        return pd.DataFrame()
+    tok = cx.groupby("arm")["tokens"].median()
+    point = {(r.model, r.arm): r.mean for r in tbl.itertuples()}
+    rows = []
+    for a, ref, what in comps:
+        for m in models:
+            if (m, a) in point and (m, ref) in point:
+                rows.append({"model": m, "arm": a, "vs": ref, "tests": what,
+                             **paired_difference(boot, (m, a), (m, ref), point[(m, a)], point[(m, ref)])})
+    pooled = pq.groupby(["arm", "qid", "paper_key"], as_index=False)["correct"].mean()
+    ptbl, pboot = cluster_bootstrap(pooled, "correct", "paper_key", ["arm"], n_boot=n_boot)
+    pp = {r.arm: r.mean for r in ptbl.itertuples()}
+    for a, ref, what in comps:
+        rows.append({"model": "all (pooled)", "arm": a, "vs": ref, "tests": what,
+                     **paired_difference(pboot, (a,), (ref,), pp[a], pp[ref])})
+    df = pd.DataFrame(rows)
+    df["p_holm"] = holm(df["p"].tolist())
+    df["acc_arm"] = [pp[a] if m == "all (pooled)" else point[(m, a)] for m, a in zip(df["model"], df["arm"], strict=True)]
+    df["acc_ref"] = [pp[r] if m == "all (pooled)" else point[(m, r)] for m, r in zip(df["model"], df["vs"], strict=True)]
+    df["tokens_arm"] = df["arm"].map(tok)
+    df["tokens_ref"] = df["vs"].map(tok)
+    return df
+
+
+def ablation_panels(abl: pd.DataFrame) -> list[dict]:
+    pooled = abl[abl["model"] == "all (pooled)"]
+    s = pooled[pooled["vs"] == "prose_local"]
+    kp = []
+    if len(s):
+        r = s.iloc[0]
+        kp.append({"label": "KU − prose (same model, same length)", "value": float(r["diff"]), "fmt": "pct1",
+                   "hint": f"95% CI {r['lo']:+.1%} to {r['hi']:+.1%}; Holm p = {r['p_holm']:.3g}"})
+    f = pooled[pooled["arm"] == "ku_clean"]
+    if len(f):
+        r = f.iloc[0]
+        kp.append({"label": "headings + field order (ku_clean − ku_flat)", "value": float(r["diff"]), "fmt": "pct1",
+                   "hint": f"95% CI {r['lo']:+.1%} to {r['hi']:+.1%}"})
+    drops = pooled[pooled["vs"] == "ku_clean"].sort_values("diff")
+    if len(drops):
+        kp.append({"label": "most important field group", "value": drops.iloc[0]["arm"].replace("ku_minus_", ""),
+                   "hint": f"dropping it costs {-drops.iloc[0]['diff']:.1%}"})
+    cols = [{"key": "model", "label": "model"}, {"key": "arm", "label": "arm"}, {"key": "vs", "label": "vs"},
+            {"key": "tests", "label": "tests"}, {"key": "acc_arm", "label": "acc. arm", "fmt": "pct1"},
+            {"key": "acc_ref", "label": "acc. ref", "fmt": "pct1"}, {"key": "diff", "label": "Δ", "fmt": "pct1"},
+            {"key": "lo", "label": "lo", "fmt": "pct1"}, {"key": "hi", "label": "hi", "fmt": "pct1"},
+            {"key": "p_holm", "label": "p (Holm)", "fmt": "float3"},
+            {"key": "tokens_arm", "label": "tokens arm", "fmt": "int"}, {"key": "tokens_ref", "label": "tokens ref", "fmt": "int"}]
+    return [
+        {"type": "kpis", "items": kp},
+        {"type": "bar", "title": "Structure ablation: Δ accuracy (pooled over models)", "fmt": "pct1", "horizontal": True,
+         "hint": "paired, paper-clustered bootstrap 95% CI; first two rows test structure, the rest drop field groups",
+         "labels": [f"{r.arm} − {r.vs}" for r in pooled.itertuples()],
+         "series": [{"name": "Δ accuracy", "data": pooled["diff"].tolist(), "lo": pooled["lo"].tolist(),
+                     "hi": pooled["hi"].tolist()}]},
+        {"type": "table", "title": "Structure ablation: paired differences (per model and pooled)", "columns": cols,
+         "rows": abl.to_dict("records"), "limit": 120},
+    ]
