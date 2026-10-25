@@ -11,9 +11,12 @@ ALEX=/mnt/vast-kisski/projects/kisski-l3s-llm4sci/gollam/envs/Alex/bin/alexandri
 PROFILE=${PROFILE:-debug}
 GEN_GRES=${GEN_GRES:-gpu:2g.20gb:1}          # 7-8B generator / judge / answerer (fp8, 14k context on 20 GB)
 TRAIN_GRES=${TRAIN_GRES:-gpu:2g.20gb:1}      # student training + generation
-TEACH_GRES=${TEACH_GRES:-gpu:3g.40gb:1}      # open-weight teacher Qwen3.5-27B-FP8 (31 GB) needs a 40 GB slice ...
+TEACH_DEFAULT_GRES=$([ "$PROFILE" = full ] && echo gpu:3g.40gb:1 || echo gpu:2g.20gb:1)   # debug teacher: Qwen3-14B-FP8
+TEACH_GRES=${TEACH_GRES:-$TEACH_DEFAULT_GRES}      # open-weight teacher Qwen3.5-27B-FP8 (31 GB) needs a 40 GB slice ...
 TEACH_OFFLOAD=${TEACH_OFFLOAD:-0}            # ... or a 20 GB slice with TEACH_OFFLOAD=16 GB of weights in CPU memory (slower)
 TEACH_SRC=${TEACH_SRC:-32000}                # paper tokens given to the teacher
+TEACH_PART=${TEACH_PART:-grete:preemptible}  # e.g. grete:preemptible,grete:interactive (if an interactive slot is free)
+TEACH_TIME=${TEACH_TIME:-02:00:00}           # short limit: backfill starts short jobs sooner on the scarce 40 GB slices
 TRAIN_ARRAY=${TRAIN_ARRAY:-3}
 SKIP=" ${SKIP:-} "
 P=(--profile "$PROFILE"
@@ -29,7 +32,7 @@ sub() { local label=$1; shift
 after() { for j in "$@"; do [ -n "$j" ] && printf -- '--after %s ' "$j"; done; }
 
 PAPERS=$(sub papers ws5 papers "${P[@]}" $FORCE);                                                echo "ws5 papers    ${PAPERS:-skipped}"
-TEACH=$(sub teacher ws5 teacher "${P[@]}" --set "site.slurm.gpu.gres=${TEACH_GRES}" --set site.slurm.gpu.mem=96G --set "ws5.teacher.cpu_offload_gb=${TEACH_OFFLOAD}" --set "ws5.teacher.source_tokens=${TEACH_SRC}" $FORCE $(after "$PAPERS"));                 echo "ws5 teacher   ${TEACH:-skipped}"
+TEACH=$(sub teacher ws5 teacher "${P[@]}" --set "site.slurm.gpu.partition=${TEACH_PART}" --set "site.slurm.gpu.gres=${TEACH_GRES}" --set "site.slurm.gpu.debug_time=${TEACH_TIME}" --set "site.slurm.gpu.time=${TEACH_TIME}" --set site.slurm.gpu.mem=96G --set "ws5.teacher.cpu_offload_gb=${TEACH_OFFLOAD}" --set "ws5.teacher.source_tokens=${TEACH_SRC}" ${TEACH_EXTRA:+--set "$TEACH_EXTRA"} $FORCE $(after "$PAPERS"));                 echo "ws5 teacher   ${TEACH:-skipped}"
 VAL=$(sub validate ws5 validate "${P[@]}" $FORCE $(after "$TEACH"));                              echo "ws5 validate  ${VAL:-skipped}"
 TRAIN=$(sub train ws5 train "${P[@]}" "${TRN[@]}" $FORCE --array "$TRAIN_ARRAY" $(after "$VAL")); echo "ws5 train     ${TRAIN:-skipped} (array $TRAIN_ARRAY)"
 GENR=$(sub generate ws5 generate "${P[@]}" "${TRN[@]}" $FORCE --array "$TRAIN_ARRAY" $(after "$TRAIN" "$TEACH")); echo "ws5 generate  ${GENR:-skipped} (array $TRAIN_ARRAY)"
