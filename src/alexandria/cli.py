@@ -26,7 +26,7 @@ import sys
 from .config import PROFILES, available_datasets, load_config
 from .runtime import STAGES, Context, run_stage
 
-WORKSTREAMS = ("ws1", "ws2", "ws3", "ws4", "ws5", "ws6")
+WORKSTREAMS = ("ws1", "ws2", "ws3", "ws4", "ws5", "ws6", "x1", "x2", "x3", "x4", "x5", "x6", "s1", "c1")
 
 
 def _load_stages() -> None:

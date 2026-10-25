@@ -133,13 +133,43 @@ def partition(shards: list[Shard], index: int, count: int) -> list[Shard]:
     return [s for s in shards if owner[s.rel] == index]
 
 
+OPTOUT_KEYS = ("paper_id", "source_doi", "oa_doi")
+
+
+@lru_cache(maxsize=4)
+def optout_ids(path: str | None) -> frozenset[str]:
+    """Normalised ids of the opt-out / takedown list (docs/TAKEDOWN.md): paper ids or DOIs, one per line, # comments."""
+    if not path or not os.path.exists(path):
+        return frozenset()
+    out = set()
+    for line in open(path, encoding="utf-8"):
+        v = line.split("#", 1)[0].strip().lower()
+        if v:
+            out.add(v.removeprefix("https://doi.org/").removeprefix("doi:"))
+    return frozenset(out)
+
+
+def optout_mask(tbl: pa.Table, ids: frozenset[str]) -> pa.Array:
+    """True for rows to KEEP (none of paper_id / source_doi / oa_doi is on the opt-out list)."""
+    keep = [True] * tbl.num_rows
+    for c in OPTOUT_KEYS:
+        if c in tbl.column_names:
+            for i, v in enumerate(tbl[c].to_pylist()):
+                if v and str(v).strip().lower().removeprefix("https://doi.org/") in ids:
+                    keep[i] = False
+    return pa.array(keep)
+
+
 def iter_batches(cfg: Config, shard: Shard, columns: list[str], batch_size: int = 1024) -> Iterator[pa.Table]:
-    """Stream one shard as unified-type tables with the provenance columns attached."""
+    """Stream one shard as unified-type tables with the provenance columns attached. Rows on the opt-out list
+    (site.optout_file) are dropped; provenance (_file, _row) keeps the release row numbers."""
     schema = unified_schema(cfg)
     pf = pq.ParquetFile(shard.path)
     names = set(pf.schema_arrow.names)
     has_prov = "_file" in names
-    src = {c: source_name(cfg, c, names) for c in columns if c not in PROVENANCE}
+    optout = optout_ids(str(cfg.site.optout_file) if cfg.site.optout_file else None)
+    extra = [c for c in OPTOUT_KEYS if optout and c not in columns]
+    src = {c: source_name(cfg, c, names) for c in [*columns, *extra] if c not in PROVENANCE}
     read_cols = sorted({s for s in src.values() if s}) + ([c for c in PROVENANCE if c in names] if has_prov else [])
     offset = 0
     for batch in pf.iter_batches(batch_size=batch_size, columns=read_cols):
@@ -156,6 +186,8 @@ def iter_batches(cfg: Config, shard: Shard, columns: list[str], batch_size: int 
             tbl = tbl.append_column("_row", pa.array(range(offset, offset + n), pa.int64()))
             tbl = tbl.append_column("_group", pa.array([shard.group] * n, pa.string()))
         offset += n
+        if optout:
+            tbl = tbl.filter(optout_mask(tbl, optout)).drop_columns(extra)
         yield tbl
 
 

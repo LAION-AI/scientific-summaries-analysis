@@ -57,6 +57,7 @@ class SiteConfig(BaseModel):
     slurm: SlurmConfig
     default_dataset: str = "scientific-summaries"
     llm: dict[str, Any] = {}          # global LLM overrides: quantization (e.g. fp8), max_model_len cap
+    optout_file: Path | None = None   # opt-out / takedown list (paper ids or DOIs, one per line): rows are dropped on read
 
 
 class Source(BaseModel):

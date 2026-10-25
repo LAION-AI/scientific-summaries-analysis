@@ -39,6 +39,22 @@ WS_INFO = {
             "question": "Can a 9-12B student, distilled from teacher KUs, match the teacher at a fraction of the cost?"},
     "ws6": {"title": "Embeddings as input",
             "question": "Extreme compression: can a projected KU embedding (a few knowledge tokens) replace the text?"},
+    "x1": {"title": "Retrieval evaluation of the indices",
+           "question": "How well do the released indices find the gold paper (LitSearch, CiteME, SciFact)? BM25 vs dense vs RRF, PQ48 loss, latency."},
+    "x2": {"title": "Post-cutoff benchmark",
+           "question": "Questions from papers published after every model's cutoff: does the skill help when the model cannot know?"},
+    "x3": {"title": "Comparison with existing systems",
+           "question": "Alexandria vs OpenScholar and PaperQA2 on shared benchmarks."},
+    "x4": {"title": "Field-level & cross-paper queries",
+           "question": "Questions only a structured corpus answers well: field-level search (results, limitations, claims) and cross-paper aggregation."},
+    "x5": {"title": "Knowledge conflict",
+           "question": "Do models follow the retrieved KU or their prior? Edited facts in retrieved KUs test whether gains come from the corpus."},
+    "x6": {"title": "Token & compute efficiency",
+           "question": "How many tokens, GPU-seconds and how much money do KUs save at inference and in training, at equal accuracy?"},
+    "s1": {"title": "Safety checks & evaluation",
+           "question": "Is the dataset safe to release and to plug into agents? PII, harmful / dual-use content, prompt injection, retractions, and retrieval uplift on hazardous knowledge."},
+    "c1": {"title": "Regulatory & ethics compliance",
+           "question": "Does the release meet the EU AI Act, GDPR, EU copyright (TDM) and the EU / OECD / UNESCO / NIST trustworthy-AI requirements, and what is still open? (Evidence matrix, not legal advice.)"},
 }
 
 
