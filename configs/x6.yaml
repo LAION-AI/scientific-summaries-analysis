@@ -1,0 +1,47 @@
+# X6: token & compute efficiency. How many tokens, GPU-seconds, FLOPs, energy and money do KUs save at inference and
+# in training, always paired with accuracy? Reads the outputs of WS2 (QA bench, contexts, grades), WS3 (index, items),
+# WS4 (token-matched training data, knowledge probe), X1 / X2 (indices, post-cutoff questions).
+
+profiles:
+  debug: {x6_latency_items: 30, x6_train_model: qwen2.5-0.5b, x6_rag_items: 100}
+  full: {}
+
+x6:
+  models: [qwen2.5-7b, olmo3-7b]          # answer models (both have WS2 grades); one array task per model
+  judge: qwen3-8b                         # SimpleQA judge, as WS2 / WS3
+
+  cost:                                   # assumptions for $ / energy (state them in the paper)
+    usd_per_gpu_hour: 2.0                 # one full A100 80GB (typical cloud on-demand price class); MIG slices pay their share
+    slice_fraction: 0.2857                # 2g.20gb = 2 of 7 A100 compute slices
+    gpu_tdp_watts: 400                    # A100-SXM4 TDP; energy = GPU-seconds x TDP x slice_fraction (estimate)
+
+  inference:
+    arms: [closed_book, full_text, full_text_matched, ku_raw, ku_clean, prose_local, ku_local]   # those present are used
+    truncation_budgets: [500, 1000, 2000, 4000, 8000]    # full text cut to N tokens: the full-text accuracy-vs-tokens curve
+    latency_items: 60                     # per arm: single-request latency (batch 1, prefix cache reset per request)
+    max_tokens: 64                        # as WS2
+    gpu_memory_utilization: 0.85
+
+  rag:
+    budgets: [500, 1000, 2000, 4000, 8000]   # retrieved-context tokens
+    kinds: [summary, fulltext]           # KU units (fields + claims) vs full-text chunks of the WS3 index
+    candidates: 60                       # hybrid top-k units considered before packing to the budget
+    items: null                          # null = all qabench-open items + X2 post-cutoff questions
+    max_tokens: 64
+    gpu_memory_utilization: 0.85
+
+  train:                                 # data / compute efficiency of post-training (WS4 recipe, LoRA)
+    model: qwen2.5-7b                    # full profile; debug: profiles.debug.x6_train_model
+    conditions: [ku, summary, full]
+    fractions: [0.25, 0.5, 1.0, 2.0]     # x the WS4 token budget (data + replay tokens of docs_<condition>)
+    seq: 2048
+    per_device_batch: 4
+    grad_accum: 1                        # tokens / step = seq x batch x accum (8,192): small steps for a fine curve
+    lora: {r: 64, alpha: 128, dropout: 0.05, target_modules: all-linear}
+    lr: 1.0e-4
+    warmup_ratio: 0.03
+    probe_max_model_len: 4096
+
+  results:
+    n_boot: 2000
+    iso_targets: [0.8, 0.9, 1.0]         # share of full-text accuracy for the iso-accuracy token comparison

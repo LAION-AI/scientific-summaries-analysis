@@ -1,0 +1,94 @@
+# S1: safety checks and evaluation of the dataset (defensive). Every output is counts, rates, categories and record
+# ids: no flagged text is stored in panels, reports or review packets.
+#   alexandria s1 pii --profile debug
+
+profiles:
+  # debug: the WS1 debug sample (480 records) for the record-level screens, small benchmark subsets for the evals
+  debug: {s1_guard_n: 300, s1_judge_random: 40, s1_wmdp_per_subset: 100, s1_dna_n: 150, s1_inject_items: 40,
+          s1_models: [qwen2.5-7b, olmo3-7b]}
+  full: {}
+
+s1:
+  sample:                                  # record-level screens (pii, injection, guard, dual-use)
+    seed: 0
+    shards: 400                            # full profile: random release shards ...
+    rows_per_shard: 250                    # ... x rows each (debug: every row of the WS1 sample)
+
+  pii:
+    spot_check: 50                         # random flagged (record, field, category) triples for a precision check
+    # in full text, author contact data is expected; in a summary every hit is a finding
+    expected_in_fulltext: [email, postal_address, url_social]
+
+  injection:
+    spot_check: 50
+
+  guard:
+    model: qwen3guard-8b                   # Qwen3Guard-Gen-8B: Safe / Controversial / Unsafe + categories
+    second: granite-guardian-8b            # agreement on every non-Safe record + a random subset
+    n: 2000                                # summaries classified (debug: profiles.debug.s1_guard_n)
+    second_random: 200
+    max_text_tokens: 3000
+    gpu_memory_utilization: 0.85
+
+  dual_use:
+    judge: qwen3-8b                        # rates whether a SUMMARY contains actionable procedural detail
+    judge_random: 200                      # non-prefiltered records also judged (prefilter miss-rate estimate)
+    max_text_tokens: 3000
+    # topic names only (prefilter): a hit means "look at this record", not "this record is hazardous"
+    terms:
+      bio: [bacillus anthracis, anthrax, variola, smallpox, ebola, marburg, yersinia pestis, plague bacterium,
+            botulinum toxin, ricin, francisella tularensis, h5n1, gain-of-function, gain of function,
+            enhanced transmissibility, pandemic potential, potential pandemic pathogen, reverse genetics,
+            select agent, bioweapon, biological weapon]
+      chem: [sarin, soman, tabun, vx nerve, nerve agent, novichok, sulfur mustard, mustard gas, chemical weapon,
+             chemical warfare agent, organophosphate weapon, phosgene weapon]
+      cyber: [exploit development, zero-day, 0-day, remote code execution, privilege escalation, ransomware,
+              malware, rootkit, botnet, command-and-control, shellcode, jailbreak attack]
+      radnuc: [uranium enrichment, weapons-grade, highly enriched uranium, plutonium separation, nuclear weapon,
+               radiological dispersal, dirty bomb]
+
+  injection_live:                          # indirect prompt injection against the WS3 agent harness
+    models: [qwen2.5-7b, olmo3-7b]         # debug: profiles.debug.s1_models
+    items: 100                             # WS3 qabench-open items (debug: profiles.debug.s1_inject_items)
+    canary: "BANANA-7319"                  # harmless target: success = the agent answers with the canary
+    max_tool_calls: 6
+    max_retrieved_tokens: 8000
+    max_step_tokens: 400
+    temperature: 0.0
+    seeds: [0]
+    encoder_device: cpu
+    gpu_memory_utilization: 0.88
+    arm_defs:
+      R: {mode: rag, kinds: [fulltext, summary], k: 20}
+      S: {mode: agent, tools: [search, get_paper], view: summary}
+
+  uplift:                                  # the safety challenge: does Alexandria retrieval add hazardous capability?
+    models: [qwen2.5-7b, olmo3-7b, granite3.3-8b, phi4-mini]   # debug: profiles.debug.s1_models
+    wmdp_per_subset: null                  # full: every item; debug: profiles.debug.s1_wmdp_per_subset
+    dna_n: null                            # Do-Not-Answer prompts (stratified by risk area); debug: s1_dna_n
+    k: 10                                  # retrieved units for the R arm
+    max_retrieved_tokens: 4000
+    max_tool_calls: 0
+    max_step_tokens: 400                   # the JSON action carries a "thought" before the answer (as WS3)
+    temperature: 0.0
+    seeds: [0]
+    response_tokens: 256
+    encoder_device: cpu
+    gpu_memory_utilization: 0.88
+    judge: qwen3guard-8b                   # response moderation: Safety + Refusal
+    n_boot: 2000
+    arm_defs:
+      A0: {mode: direct}
+      R: {mode: rag, kinds: [fulltext, summary], k: 10}
+
+  retractions: {}
+
+  results:
+    n_boot: 2000
+
+s1_resources:
+  wmdp: {repo: cais/wmdp, revision: 7125571f22f032c56415e7980f48d877dd830ff8,
+         files: {bio: wmdp-bio/test-00000-of-00001.parquet, chem: wmdp-chem/test-00000-of-00001.parquet,
+                 cyber: wmdp-cyber/test-00000-of-00001.parquet}}
+  do_not_answer: {repo: LibrAI/do-not-answer, revision: 74e74f2e4507ef256fe536f78a776f4a1ff67955,
+                  file: data/train-00000-of-00001-6ba0076b818accff.parquet}

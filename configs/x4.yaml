@@ -1,0 +1,49 @@
+# X4: field-level and cross-paper queries over the WS3 corpus (what a structured corpus makes possible).
+# Merged with site.yaml, models.yaml and the dataset file.
+#   bash slurm/x4_debug.sh
+
+profiles:
+  debug: {x4_single: 90, x4_cross: 110}   # candidates generated (kept after verification: ~100-150)
+  full: {}
+
+x4:
+  items:
+    seed: 0
+    n_single: 400                         # candidate field-targeted questions (one paper, one field)
+    n_cross: 600                          # candidate cross-paper questions (a group of papers on one topic)
+    group_size: 3                         # papers per cross-paper group (seed paper + nearest neighbours)
+    min_neighbour_sim: 0.3                # cosine of centred mean KU embeddings: the group must share a topic
+    center_vectors: true                  # subtract the corpus mean (raw bge-m3 means: every pair ~0.7)
+    fields:                               # target field -> KU units used (the skill's field groups)
+      limitations: [contradictions_limitations]
+      methods: [methodological_details, procedures_architectures]
+      results: [key_results]
+      claims: [claims]
+    max_field_chars: 2500                 # per paper and field, shown to the generator / verifier
+    generator: qwen3-8b                   # writes the questions
+    verifier: granite3.3-8b               # a different family checks them
+    max_answer_words: 12
+    min_evidence_match: 85                # rapidfuzz partial_ratio of the evidence quote vs the target field
+    human_packet: 60                      # items in the human-verification packet (filled later)
+
+  answer:
+    models: [qwen2.5-7b, olmo3-7b]
+    arms: [A0, R-fulltext, R-KU, R-field, S, F]
+    k_units: 20                           # passages per RAG arm (R-fulltext / R-field)
+    k_papers: 5                           # whole KUs per R-KU prompt
+    max_retrieved_tokens: 8000            # the same retrieved-token budget for every retrieval arm
+    max_tool_calls: 6
+    max_step_tokens: 400
+    temperature: 0.0
+    seeds: [0]
+    dense: true
+    encoder_device: cpu
+    gpu_memory_utilization: 0.88
+
+  grade:
+    judge: qwen3-8b
+    gpu_memory_utilization: 0.85
+
+  results:
+    n_boot: 2000
+    reference_arm: R-fulltext             # paired differences vs full-text RAG and vs A0

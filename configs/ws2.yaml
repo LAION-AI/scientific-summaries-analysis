@@ -32,6 +32,16 @@ ws2:
 
   ku: {}                                # one KU per paper = the dataset row's 18-field summary (+ KU-Fixes); no LLM
 
+  ablation:                             # structure ablation: is it the schema or just "a summary"?
+    enabled: true                         # contexts adds ku_minus_<group>, ku_results_claims, ku_flat (+ ku_local /
+                                          #   prose_local once ablation-gen has run)
+    generator: qwen3-8b                   # one local model writes both the KU and the prose (same source / length)
+    source_tokens: 8000                   # paper cut to this many generator tokens (fits 14,336 with the output)
+    ku_max_tokens: 5000
+    tolerance: 0.10                       # prose length within +-10% of the paper's local KU (tokens)
+    seed: 0                               # ku_flat field-order shuffle
+    gpu_memory_utilization: 0.85
+
   contexts:
     tokenizer: qwen2.5-7b                 # reference tokenizer for token counts
     full_text_chars: 30000                # full-paper arm: first 30k characters of the source
@@ -39,7 +49,10 @@ ws2:
 
   answer:
     models: [qwen2.5-7b, olmo3-7b, granite3.3-8b, phi4-mini]   # 4 families; Qwen3 is the question generator / judge
-    arms: [closed_book, full_text, full_text_matched, ku_raw, ku_clean]
+    arms: [closed_book, full_text, full_text_matched, ku_raw, ku_clean,
+           ku_local, prose_local, ku_minus_context, ku_minus_methods, ku_minus_results, ku_minus_claims,
+           ku_minus_limitations, ku_minus_takeaways, ku_results_claims, ku_flat]
+    part_suffix: ""                       # extra-arm runs: --set 'ws2.answer.arms=[...]' --set ws2.answer.part_suffix=__ablation
     seeds: [0]
     temperature: 0.0
     max_tokens: 64

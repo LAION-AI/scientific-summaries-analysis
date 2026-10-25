@@ -5,7 +5,7 @@
 
 profiles:
   # debug: the `sample` stage copies a tiny stratified subset; every later stage reads only that.
-  debug: {files_per_group: 2, rows_per_file: 60, seed: 0, gpu_papers: 100}   # gpu_papers: cap for GPU stages
+  debug: {files_per_group: 2, rows_per_file: 60, seed: 0, gpu_papers: 100, audit_sample_shards: 20, audit_rows_per_shard: 100}   # gpu_papers: cap for GPU stages
   # full: every shard of every source; map stages split the shards over SLURM array tasks.
   full: {}
 
@@ -25,6 +25,22 @@ ws1:
   length_spec_words: {}                 # documented per-field length targets (words), set by the dataset file
   reconcile: {claims: []}               # published numbers to check against measured ones, set by the dataset file
   provenance: {prompt_file: null, temperature: null, price_per_mtok: null}
+  audit:                                # paper consistency audit (section 5 of the plan)
+    workers: 16
+    seed: 0
+    sample_shards: 200                    # heavy columns (fields, raw / sanitized text) from this many random shards
+    rows_per_shard: 200
+    tokenizer: qwen2.5-7b                 # reference tokenizer for per-field token statistics
+    viz_sample: 500000                    # seeded random sample for the embedding visualisation
+    arxiv_claim: {share: 0.998, of: 3011619}
+    arxiv_rows_published: 3322974
+    papers_published: 22087912
+    tokens_claim: 60000000000
+    faiss_summary_vectors: 21796509
+  licenses:                               # per-record licence (LOGIN node: OpenAlex API + arXiv OAI-PMH)
+    openalex_pause: 0.2
+    oai_pause: 3.0                        # arXiv asks for >= 3 s between OAI-PMH requests
+    max_oai_requests: 200
 
   checks:
     output_token_cap: 8192                # Gemini 2.0 Flash Lite max output tokens; tokens_out >= cap - margin = capped
@@ -70,7 +86,7 @@ ws1:
 # ------------------------------------------------------------------ WS1b: content faithfulness
 ws1b:
   human:
-    enabled: false                        # 2026-10-21: no annotators yet -> human-sample / human-agreement / calibrate skip
+    enabled: true                         # 2026-10-25: packets are generated; agreement / calibrate wait for filled-in labels
     n_papers: 500                         # 400-600 in the plan
     double_annotated_share: 0.2
     strata: [group, input_type, domain]   # one summarizer model in arxiv/pubmed, so it is not a stratum here

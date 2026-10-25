@@ -1,0 +1,37 @@
+# X5: knowledge conflict. Do models answer from the retrieved KU or from their prior? The answer-bearing fact of
+# the gold paper's KU is edited to a counterfactual; the model sees the original KU, the edited KU, or retrieval
+# results in which the gold paper's units are replaced by edited ones (a COPY: the real index is never changed).
+
+profiles:
+  debug: {x5_pre_items: 150, x5_post_items: 24}
+  full: {}
+
+x5:
+  items:
+    pre_items: 600                        # WS2 QA-bench questions (gold paper in the WS3 index; pre-cutoff papers)
+    post_items: null                      # X2 post-cutoff questions (gold paper in the X2 index); null = all
+    max_per_paper: 2
+    seed: 0
+    retrieve_k: 10                        # R arm: top-k KU units (summary view) from the hybrid backend
+    embedder: bge-m3
+
+  counterfactual:
+    generator: qwen3-8b                   # proposes non-numeric counterfactual answers and rewrites the evidence sentences
+    candidates: 12                        # KU sentences shown to the editor (ranked by overlap with question + answer)
+    max_edits: 4
+    numeric_factors: [0.5, 2.0, 3.0, 0.25, 1.5]   # numbers: the first number of the answer is scaled (deterministic)
+    max_tokens: 1500
+    gpu_memory_utilization: 0.85
+
+  answer:
+    models: [qwen2.5-7b, olmo3-7b]
+    conditions: [closed_book, ku_original, ku_counterfactual, rag_original, rag_counterfactual]
+    max_context_tokens: 8000
+    max_tokens: 64
+    gpu_memory_utilization: 0.85
+
+  grade:
+    judge: qwen3-8b                       # SimpleQA protocol, once against the original and once against the edited answer
+
+  results:
+    n_boot: 2000

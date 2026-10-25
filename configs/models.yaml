@@ -18,7 +18,18 @@ models:
   # so long papers fit); Apache-2.0, so its outputs may train other models and be released openly
   qwen3.5-27b:   {hf: Qwen/Qwen3.5-27B-FP8,               revision: 97f5941bf617e31c5e237364a8602ce3f03a551a, family: qwen3.5, size_b: 27.0, max_model_len: 40960,
                   license: apache-2.0, chat_kwargs: {enable_thinking: false}, vllm_kwargs: {limit_mm_per_prompt: {image: 0, video: 0}}}
+  # X2 question generator (a family used nowhere else; MXFP4 weights, fits a 20 GB slice) and X3 OpenScholar LM
+  gpt-oss-20b:   {hf: openai/gpt-oss-20b,                 revision: 6cee5e81ee83917806bbde320786a8fb61efebee, family: gpt-oss, size_b: 21.0, max_model_len: 24576,
+                  license: apache-2.0, chat_kwargs: {reasoning_effort: low}}
+  openscholar-8b: {hf: OpenScholar/Llama-3.1_OpenScholar-8B, revision: 8f9c03066206880174d24f083dc46afa61a0c7a7, family: llama, size_b: 8.0, max_model_len: 16384,
+                  license: llama3.1}
+  # WS5 debug teacher: fits a 20 GB slice (official FP8, 15 GB); the full run uses qwen3.5-27b on a 40 GB slice
+  qwen3-14b:     {hf: Qwen/Qwen3-14B-FP8,                 revision: 9a283b4a5efbc09ce247e0ae5b02b744739e525a, family: qwen3,   size_b: 14.8, max_model_len: 10240,
+                  license: apache-2.0, chat_kwargs: {enable_thinking: false}, vllm_kwargs: {enforce_eager: true}}
   phi4-mini:     {hf: microsoft/Phi-4-mini-instruct,      revision: cfbefacb99257ffa30c83adab238a50856ac3083, family: phi,     size_b: 3.8, max_model_len: 32768}
+  # S1 safety: open guard models (Apache-2.0)
+  qwen3guard-8b: {hf: Qwen/Qwen3Guard-Gen-8B,             revision: 4505cb1a6f1864f21f8b27f7daf1b9a1aab6edbb, family: qwen3,   size_b: 8.2, max_model_len: 32768, license: apache-2.0}
+  granite-guardian-8b: {hf: ibm-granite/granite-guardian-3.3-8b, revision: b3421eda4ba6fc9f9a71121d7e62de08827469a4, family: granite, size_b: 8.2, max_model_len: 32768, license: apache-2.0}
 
 embedders:
   gte-modernbert: {hf: Alibaba-NLP/gte-modernbert-base, revision: e7f32e3c00f91d699e8c43b53106206bcc72bb22, pooling: cls, max_length: 8192, batch_size: 32}   # the dataset's search-index embedder (768-d)

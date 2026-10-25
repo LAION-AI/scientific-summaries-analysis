@@ -1,0 +1,125 @@
+# C1: regulatory & ethics compliance evidence matrix (EU AI Act, GDPR, EU copyright / TDM, EU Ethics Guidelines for
+# Trustworthy AI / ALTAI, Council of Europe AI Convention, OECD, UNESCO, NIST AI RMF).
+# This is an EVIDENCE MATRIX, not legal advice: each requirement is mapped to measured evidence from the pipelines;
+# items marked `legal: true` always need review by a lawyer / DPO, whatever the evidence says.
+# Documents (DPIA, privacy notice, copyright policy, training-data summary) count as met only when signed
+# (docs/<file> with a filled `Approved-by:` line); the drafts the review stage writes count as partial.
+# Conditions: {key: <evidence key>, op: lt|le|gt|ge|eq|true|false|exists, value: <x>}. Status = met if all `met`
+# conditions hold, else partial if all `partial` conditions hold, else gap ("unknown" if evidence is missing).
+
+profiles:
+  debug: {}
+  full: {}
+
+c1:
+  max_records: 200000                     # records scanned for language / country / health identifiers (full: a sample)
+  docs:                                   # repository documents (relative to the project root) checked for existence;
+    takedown: docs/TAKEDOWN.md            # datasheet + Croissant RAI come from the ws1 datasheet stage
+    dpia: docs/DPIA.md
+    privacy_notice: docs/PRIVACY_NOTICE.md
+    copyright_policy: docs/COPYRIGHT_POLICY.md
+    training_data_summary: docs/TRAINING_DATA_SUMMARY.md
+  tdm:                                    # c1 tdm (login node): TDMRep + robots.txt per DOI prefix
+    dois_per_prefix: 3                    # landing pages sampled per DOI prefix (registrant); others inherit its result
+    max_prefixes: 400                     # full: raise to cover every prefix (a few thousand)
+    timeout: 15
+    pause: 0.3                            # seconds between requests
+    ai_agents: [GPTBot, CCBot, Google-Extended, ClaudeBot, anthropic-ai, PerplexityBot, Bytespider, cohere-ai,
+                meta-externalagent, Applebot-Extended]
+  eu_countries: [AT, BE, BG, HR, CY, CZ, DK, EE, FI, FR, DE, GR, HU, IE, IT, LV, LT, LU, MT, NL, PL, PT, RO, SK, SI, ES, SE,
+                 IS, LI, NO]              # EU + EEA: authors whose data fall under the GDPR's territorial scope (Art. 3)
+
+  requirements:
+    # ------------------------------------------------------------- GDPR (Regulation (EU) 2016/679)
+    - {id: GDPR-5c, framework: GDPR, ref: "Art. 5(1)(c)", requirement: "Data minimisation: no personal data beyond what the purpose needs (KUs should not carry personal data)",
+       met: [{key: pii.summary_rate, op: lt, value: 0.001}], partial: [{key: pii.summary_rate, op: lt, value: 0.02}],
+       action: "redact detected personal data from KUs; keep author metadata only in bibliographic columns"}
+    - {id: GDPR-9, framework: GDPR, ref: "Art. 9", requirement: "Special categories (health data): no identifiable patient information in records",
+       met: [{key: pii.special_category_rate, op: eq, value: 0}], partial: [{key: pii.special_category_rate, op: lt, value: 0.01}],
+       action: "screen PubMed case reports for patient identifiers; drop or redact; document in the DPIA", legal: true}
+    - {id: GDPR-6-89, framework: GDPR, ref: "Art. 6(1)(f), 89", requirement: "Lawful basis for processing personal data in scholarly metadata (legitimate interest / scientific research) with Art. 89 safeguards",
+       met: [{key: docs.dpia, op: true}], partial: [{key: drafts.dpia, op: true}], action: "document the lawful basis and research safeguards in the DPIA", legal: true}
+    - {id: GDPR-14, framework: GDPR, ref: "Art. 14", requirement: "Information to data subjects whose data were not obtained from them (authors in metadata)",
+       met: [{key: docs.privacy_notice, op: true}], partial: [{key: drafts.privacy_notice, op: true}], action: "publish a privacy notice on the dataset page (Art. 14(5)(b) exemption needs justification)", legal: true}
+    - {id: GDPR-17-21, framework: GDPR, ref: "Art. 17, 21", requirement: "Erasure and objection: a working removal mechanism",
+       met: [{key: optout.mechanism, op: true}, {key: docs.takedown, op: true}], partial: [{key: docs.takedown, op: true}],
+       action: "keep the opt-out list applied in every rebuild; log requests"}
+    - {id: GDPR-25, framework: GDPR, ref: "Art. 25", requirement: "Data protection by design: automated personal-data screening in the pipeline",
+       met: [{key: pii.screened, op: true}], action: "run the S1 PII screen on every release build"}
+    - {id: GDPR-35, framework: GDPR, ref: "Art. 35", requirement: "Data protection impact assessment for large-scale processing",
+       met: [{key: docs.dpia, op: true}], partial: [{key: drafts.dpia, op: true}], action: "write a DPIA with the DPO (scale: 22M records with author metadata)", legal: true}
+
+    # ------------------------------------------------------------- EU AI Act (Regulation (EU) 2024/1689)
+    - {id: AIA-53-1c, framework: EU AI Act, ref: "Art. 53(1)(c)", requirement: "GPAI providers training on the data: copyright policy that identifies and respects TDM reservations (Art. 4(3) DSM)",
+       met: [{key: docs.copyright_policy, op: true}, {key: tdm.checked_share, op: ge, value: 0.9}],
+       partial: [{key: drafts.copyright_policy, op: true}, {key: tdm.reservations_checked, op: true}],
+       action: "publish a copyright policy; check machine-readable TDM reservations (TDMRep / robots) per source", legal: true}
+    - {id: AIA-53-1d, framework: EU AI Act, ref: "Art. 53(1)(d)", requirement: "Sufficiently detailed public summary of the training content (AI Office template)",
+       met: [{key: docs.training_data_summary, op: true}], partial: [{key: drafts.training_data_summary, op: true}, {key: docs.datasheet, op: true}],
+       action: "fill the AI Office training-data summary template from the datasheet and audit numbers"}
+    - {id: AIA-53-1ab, framework: EU AI Act, ref: "Art. 53(1)(a)(b), Annex XI-XII", requirement: "Technical documentation for downstream providers (sources, curation, processing)",
+       met: [{key: docs.datasheet, op: true}, {key: docs.croissant_rai, op: true}, {key: repro.manifests, op: gt, value: 0}],
+       action: "ship datasheet + Croissant RAI + pipeline manifests with every release"}
+    - {id: AIA-COP-C, framework: EU AI Act, ref: "GPAI Code of Practice, copyright chapter", requirement: "Respect robots.txt and other machine-readable rights reservations when collecting the data",
+       met: [{key: tdm.checked_share, op: ge, value: 0.9}], partial: [{key: tdm.reservations_checked, op: true}],
+       action: "keep the c1 tdm check in every build; withhold reserved works"}
+    - {id: AIA-50-2, framework: EU AI Act, ref: "Art. 50(2)", requirement: "AI-generated content marked in a machine-readable format",
+       met: [{key: synthetic.model_field, op: true}, {key: synthetic.croissant_flag, op: true}], partial: [{key: synthetic.model_field, op: true}],
+       action: "keep `summary_model` per record and `hasSyntheticData` in Croissant; add a per-record `ai_generated: true` field"}
+    - {id: AIA-10-2fg, framework: EU AI Act, ref: "Art. 10(2)(f)(g) (best practice; binding for high-risk systems)", requirement: "Examination of possible biases and data gaps",
+       met: [{key: repr.examined, op: true}, {key: repr.non_english_share, op: gt, value: 0.05}], partial: [{key: repr.examined, op: true}],
+       action: "report language / discipline / country coverage and its gaps in the datasheet; do not claim global coverage"}
+    - {id: AIA-10-3, framework: EU AI Act, ref: "Art. 10(3) (best practice)", requirement: "Data relevant, sufficiently representative and, to the best extent possible, free of errors and complete",
+       met: [{key: quality.flag_rate, op: lt, value: 0.05}], partial: [{key: quality.flag_rate, op: lt, value: 0.2}],
+       action: "ship quality flags and the corrections layer; filter flagged records for training"}
+    - {id: AIA-15, framework: EU AI Act, ref: "Art. 15 (systems built on the data)", requirement: "Robustness and cybersecurity: resistance to manipulation (prompt injection through retrieved content)",
+       met: [{key: injection.live_follow_rate, op: lt, value: 0.01}], partial: [{key: injection.live_follow_rate, op: lt, value: 0.05}],
+       action: "sanitise retrieved text; mark tool output as untrusted data"}
+    - {id: AIA-55, framework: EU AI Act, ref: "Art. 55 (GPAI with systemic risk)", requirement: "Evaluation of systemic risks (e.g. CBRN uplift) from the data",
+       met: [{key: uplift.wmdp_delta, op: le, value: 0.0}, {key: dualuse.actionable, op: eq, value: 0}], partial: [{key: dualuse.actionable, op: eq, value: 0}],
+       action: "keep the S1 dual-use screen and uplift evaluation in every release"}
+
+    # ------------------------------------------------------------- EU copyright (Directive (EU) 2019/790, DSM)
+    - {id: DSM-3, framework: EU Copyright (DSM), ref: "Art. 3", requirement: "Text and data mining by research organisations on lawfully accessed works",
+       met: [{key: docs.copyright_policy, op: true}], partial: [{key: drafts.copyright_policy, op: true}], action: "document lawful access per source and the research purpose", legal: true}
+    - {id: DSM-4-3, framework: EU Copyright (DSM), ref: "Art. 4(3)", requirement: "Respect machine-readable TDM reservations (opt-outs) for commercial TDM",
+       met: [{key: tdm.checked_share, op: ge, value: 0.9}], partial: [{key: tdm.reservations_checked, op: true}],
+       action: "resolve the unchecked records (no DOI / publisher blocks automated access); exclude reserved works from full-text redistribution / robots.txt reservations of publishers; exclude reserved works", legal: true}
+    - {id: LIC-FT, framework: EU Copyright (DSM), ref: "licences of redistributed works", requirement: "Full text redistributed only where the licence allows it",
+       met: [{key: licenses.fulltext_nonpermissive_share, op: eq, value: 0}], partial: [{key: licenses.fulltext_nonpermissive_share, op: lt, value: 0.2}],
+       action: "redistribute full text only for permissive licences; keep KUs + metadata otherwise"}
+    - {id: LIC-REC, framework: EU Copyright (DSM), ref: "per-record licence", requirement: "Per-record licence instead of a blanket CC-BY",
+       met: [{key: licenses.found_share, op: gt, value: 0.9}], partial: [{key: licenses.found_share, op: gt, value: 0}],
+       action: "derive licences for all records (OpenAlex snapshot + arXiv OAI-PMH harvest)"}
+
+    # ------------------------------------------------------------- EU Ethics Guidelines for Trustworthy AI (HLEG 2019) / ALTAI
+    - {id: HLEG-1, framework: EU Trustworthy AI (HLEG/ALTAI), ref: "Req. 1 human agency & oversight", requirement: "Outputs flagged as derived summaries; users told to consult the paper",
+       met: [{key: docs.datasheet, op: true}, {key: synthetic.model_field, op: true}], action: "state out-of-scope uses (clinical / policy decisions) on the dataset card"}
+    - {id: HLEG-2, framework: EU Trustworthy AI (HLEG/ALTAI), ref: "Req. 2 technical robustness & safety", requirement: "Faithfulness measured; harmful and dual-use content screened",
+       met: [{key: guard.unsafe_rate, op: lt, value: 0.005}, {key: dualuse.actionable, op: eq, value: 0}], partial: [{key: guard.unsafe_rate, op: lt, value: 0.02}],
+       action: "release safety flags and faithfulness scores per record"}
+    - {id: HLEG-3, framework: EU Trustworthy AI (HLEG/ALTAI), ref: "Req. 3 privacy & data governance", requirement: "Privacy screening and data governance (opt-out, licences)",
+       met: [{key: pii.screened, op: true}, {key: optout.mechanism, op: true}], action: "see GDPR items"}
+    - {id: HLEG-4, framework: EU Trustworthy AI (HLEG/ALTAI), ref: "Req. 4 transparency", requirement: "Traceability: generation model, prompt and processing documented",
+       met: [{key: provenance.prompt_published, op: true}, {key: synthetic.model_field, op: true}], partial: [{key: synthetic.model_field, op: true}],
+       action: "publish the generation prompt and settings"}
+    - {id: HLEG-5, framework: EU Trustworthy AI (HLEG/ALTAI), ref: "Req. 5 diversity, non-discrimination & fairness", requirement: "Coverage of languages, disciplines and regions measured and reported",
+       met: [{key: repr.examined, op: true}, {key: repr.top_country_share, op: lt, value: 0.3}], partial: [{key: repr.examined, op: true}],
+       action: "report coverage gaps; avoid claims of global representativeness"}
+    - {id: HLEG-6, framework: EU Trustworthy AI (HLEG/ALTAI), ref: "Req. 6 societal & environmental well-being", requirement: "Compute and energy of building and using the dataset reported",
+       met: [{key: compute.reported, op: true}], action: "report generation cost (tokens, $) and the efficiency results (X6)"}
+    - {id: HLEG-7, framework: EU Trustworthy AI (HLEG/ALTAI), ref: "Req. 7 accountability", requirement: "Auditability: reproducible pipelines and a complaints channel",
+       met: [{key: repro.manifests, op: gt, value: 0}, {key: docs.takedown, op: true}], action: "keep manifests and the takedown procedure"}
+
+    # ------------------------------------------------------------- other frameworks
+    - {id: COE-AI, framework: Council of Europe AI Convention, ref: "Arts. 8-9 (transparency, accountability)", requirement: "Transparency and oversight of AI-generated content and its documentation",
+       met: [{key: synthetic.model_field, op: true}, {key: docs.datasheet, op: true}], action: "as AIA-50-2 / AIA-53"}
+    - {id: OECD-1.3, framework: OECD AI Principles, ref: "1.3 transparency & explainability", requirement: "Responsible disclosure of how the data were produced",
+       met: [{key: docs.datasheet, op: true}, {key: provenance.prompt_published, op: true}], partial: [{key: docs.datasheet, op: true}], action: "publish the prompt"}
+    - {id: UNESCO-P, framework: UNESCO Recommendation on AI Ethics, ref: "privacy, fairness, sustainability", requirement: "Privacy protection, fairness and environmental reporting",
+       met: [{key: pii.screened, op: true}, {key: repr.examined, op: true}, {key: compute.reported, op: true}], action: "see GDPR / HLEG items"}
+    - {id: NIST-MAP, framework: NIST AI RMF 1.0, ref: "MAP / MEASURE", requirement: "Risks mapped and measured (quality, faithfulness, safety, privacy)",
+       met: [{key: pii.screened, op: true}, {key: guard.measured, op: true}, {key: quality.measured, op: true}], action: "keep S1 and WS1 audits in the release process"}
+    - {id: NIST-GOV, framework: NIST AI RMF 1.0, ref: "GOVERN / MANAGE", requirement: "Policies, accountability and incident response (takedown)",
+       met: [{key: docs.takedown, op: true}, {key: docs.copyright_policy, op: true}], partial: [{key: docs.takedown, op: true}, {key: drafts.copyright_policy, op: true}],
+       action: "add a copyright policy and an incident-response owner"}

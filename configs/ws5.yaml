@@ -3,10 +3,11 @@
 #   teacher: Qwen3.5-27B (open weights, Apache-2.0) on a 40 GB slice; optional provider anthropic (API key, login node)
 
 profiles:
-  # debug: tiny real-data test with the real teacher (Qwen3.5-27B) and a Qwen2.5-0.5B student
+  # debug: tiny real-data test; teacher Qwen3-14B-FP8 on a 20 GB slice (40 GB slices are scarce), student Qwen2.5-0.5B
   debug: {ws5_train: 24, ws5_dev: 4, ws5_test: 12, ws5_sizes: [8, 16, 24], ws5_students: [qwen2.5-0.5b],
           ws5_teacher_provider: vllm, ws5_max_steps: 40, ws5_spot_check: 5, ws5_max_source_tokens: 3000,
-          ws5_baselines: [student_zero, released, teacher]}
+          ws5_baselines: [student_zero, released, teacher], ws5_teacher_model: qwen3-14b,
+          ws5_teacher_source_tokens: 5500, ws5_teacher_out_tokens: 3500, ws5_teacher_gpu_memory: 0.97}
   full: {}
 
 ws5:
@@ -33,6 +34,7 @@ ws5:
     poll_seconds: 60
     gpu_memory_utilization: 0.94         # 31 GB of FP8 weights on a 40 GB slice: the rest is KV cache
     cpu_offload_gb: 0                     # > 0: keep this many GB of weights in CPU memory (20 GB slices; slower)
+    vllm_kwargs: {}                       # extra vLLM engine settings, e.g. smaller batches with offloading
 
   compliance:                             # checked before generating at scale (plan: teacher terms, CC-BY release)
     terms_checked: false                  # set true only after reading the teacher provider's terms on training

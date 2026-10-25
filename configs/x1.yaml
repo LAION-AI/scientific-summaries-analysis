@@ -1,0 +1,51 @@
+# X1: retrieval evaluation of the indices. Gold-paper retrieval on LitSearch, CiteME and SciFact; BM25 vs dense vs RRF;
+# per-field summary units vs whole summary vs claims vs full-text chunks; IVF-PQ48 (as released) vs exact flat search;
+# latency and throughput; plus a diagnosis of WS3 retrieval (why agents found the gold paper less often than RAG).
+#   python -c "from alexandria.config import load_config; from alexandria.x1.benchmarks import fetch; fetch(load_config('x1','debug'))"
+#   (login node, once: downloads LitSearch; CiteME is gated on the Hub and needs HF_TOKEN with accepted terms)
+
+profiles:
+  debug: {x1_max_queries: 200, x1_distractors: 4000, x1_distractor_shards: 24}
+  full: {}
+
+x1:
+  benchmarks:
+    names: [litsearch, citeme, scifact]
+    max_queries: null                     # full: every query; debug: profiles.debug.x1_max_queries per benchmark
+    seed: 0
+    min_title_words: 5                    # gold linking: DOI, else exact normalised title (ws3.gold)
+    litsearch: {repo: princeton-nlp/LitSearch, revision: 9573fb284a1026c998df47024b888a163f0f0e25}
+    citeme: {repo: bethgelab/CiteME, revision: 6b87d95f9f4d8f44540a97ba83460442e228e031, file: CiteME.tsv}
+
+  corpus:
+    distractors: 200000                   # full: random release papers added to the linked gold papers
+    distractor_shards: 400                # drawn from this many random local shards (I/O bound)
+    seed: 0
+    chunk_words: 500                      # the release's chunk index: 500-word segments of the paper text
+    max_chunks_per_paper: 40
+
+  index:
+    embedder: gte-modernbert              # the release's dense model (768-d, CLS pooling, inner product on normalised)
+    max_length: {fields: 512, claims: 256, whole: 2048, chunks: 1024}
+    batch_size: 32
+    # IVF-PQ48 as released: summaries IVF4096,PQ48 over 21.8M vectors (nprobe 32), chunks IVF8192,PQ48 over 60.3M
+    # (nprobe 64), claims IVF16384,PQ48 over 92.1M. Scaled here: same vectors per list, same nprobe / nlist share.
+    pq_m: 48
+    pq_bits: 8
+    vectors_per_list: 5300
+    nprobe_share: 0.0078125               # 32 / 4096
+    bm25: {k1: 1.5, b: 0.75, method: lucene, stemmer: english}   # bm25s defaults + English stemmer, as in SEARCH_USAGE
+
+  search:
+    unit_depth: 1000                      # units retrieved before aggregating to papers (max score per paper)
+    paper_depth: 100
+    rrf_k: 60
+    latency_queries: 100                  # single-query timing loop per retriever
+
+  ws3_diagnosis:
+    embedder: bge-m3                      # WS3's own index uses bge-m3 + BM25 (alexandria.skill)
+    arms: [S, F, S-OA, R]
+
+  results:
+    n_boot: 2000
+    ks: [1, 5, 10, 20, 100]

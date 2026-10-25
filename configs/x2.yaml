@@ -1,0 +1,84 @@
+# X2: post-cutoff benchmark. Questions from arXiv papers submitted after the training cutoff of every evaluated model:
+# the cleanest test of WS3-H3 (does the skill help when the model cannot know the answer?). Also an incremental-update
+# demo: the new papers get KUs (WS5 pipeline) and are added to a copy of the WS3 index without rebuilding it.
+#   alexandria x2 papers --profile debug     # LOGIN node (needs internet: arXiv API + arxiv.org/html)
+
+profiles:
+  debug: {x2_papers: 24, x2_per_paper: 2, x2_verify: 15, x2_summarizer: qwen3-8b}
+  full: {}
+
+x2:
+  cutoff:
+    # Every model whose answers are evaluated (WS2 / WS3 answerers + agents, WS4 trainees, WS5 students) with its
+    # stated training-data cutoff where the model card gives one, else its Hub release date (an upper bound).
+    after: "2026-06-01"                   # papers submitted on or after this date (> every model's cutoff / release)
+    until: null                           # null = today
+    models:
+      qwen2.5-7b:    {release: 2024-09-16, cutoff: null, source: "Hub created_at (card states none)"}
+      olmo3-7b:      {release: 2025-11-19, cutoff: null, source: "Hub created_at"}
+      granite3.3-8b: {release: 2025-04-09, cutoff: null, source: "Hub created_at"}
+      phi4-mini:     {release: 2025-02-19, cutoff: 2024-06, source: "model card: 'cutoff date of June 2024'"}
+      qwen3-8b:      {release: 2025-04-27, cutoff: null, source: "Hub created_at (question critic / judge)"}
+      qwen3-4b:      {release: 2025-08-05, cutoff: null, source: "Hub created_at (WS4)"}
+      qwen3.5-9b:    {release: 2026-02-27, cutoff: null, source: "Hub created_at (WS5 student)"}
+      gemma4-12b:    {release: 2026-05-23, cutoff: 2025-01, source: "model card: 'cutoff date of January 2025' (WS5)"}
+      gpt-oss-20b:   {release: 2025-08-04, cutoff: 2024-06, source: "OpenAI model card (question generator)"}
+    dataset_arxiv_until: "2026-04"        # Scientific-Summaries arXiv coverage ends here: new papers need new KUs
+
+  papers:
+    n: 600                                # full: ~600 papers x ~1.5 questions -> 500-1,000 questions
+    categories: [cs, physics, cond-mat, astro-ph, q-bio, math, stat, eess, econ, quant-ph]   # stratified (primary)
+    min_text_chars: 8000                  # full text from arxiv.org/html/<id> (LaTeX-rendered); papers without HTML skipped
+    max_text_chars: 200000
+    api_delay_s: 3.1                      # arXiv API terms: at most one request every 3 s
+    html_delay_s: 1.0
+    seed: 0
+
+  summarize:                              # incremental update: KUs for the new papers, WS5 prompt / schema / validation
+    model: qwen3.5-27b                    # WS5 teacher (40 GB slice); debug: profiles.debug.x2_summarizer (qwen3-8b, 20 GB)
+    source_tokens: 32000
+    out_tokens: 6000
+    gpu_memory_utilization: 0.94
+
+  questions:                              # generator from a family used nowhere else in the project
+    generator: gpt-oss-20b                # OpenAI gpt-oss (MXFP4, fits a 20 GB slice); critic = same model
+    per_paper: 2                          # kept per paper (full: 2)
+    generate_per_paper: 6
+    max_source_tokens: 12000
+    max_tokens: 6000                      # reasoning model: room for the analysis channel + the JSON
+    max_answer_words: 15
+    min_evidence_match: 90
+    copy_ngram: 8
+    gpu_memory_utilization: 0.95          # MXFP4 weights take ~17 GB of a 20 GB slice; the rest is KV cache
+
+  verify:
+    n: 100                                # human-verification packet (random subset)
+
+  index:                                  # copy of the WS3 index + the new papers (BM25 rebuilt, dense: new units only)
+    embedder: bge-m3
+    chunk_words: 300
+    chunk_overlap: 50
+    max_words_per_paper: 20000
+
+  eval:
+    models: [qwen2.5-7b, olmo3-7b, granite3.3-8b, phi4-mini]   # the WS3 answer models
+    arms: [A0, R, F, S]
+    max_tool_calls: 6
+    max_retrieved_tokens: 8000
+    max_step_tokens: 400
+    temperature: 0.0
+    seeds: [0]
+    dense: true
+    encoder_device: cpu
+    gpu_memory_utilization: 0.88
+    arm_defs:
+      A0: {mode: direct}
+      R:  {mode: rag, kinds: [fulltext, summary], k: 20}
+      F:  {mode: agent, tools: [search_fulltext], view: fulltext}
+      S:  {mode: agent, tools: [search, get_paper], view: summary}
+
+  grade:
+    judge: qwen3-8b
+
+  results:
+    n_boot: 2000

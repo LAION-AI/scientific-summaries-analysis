@@ -1,0 +1,60 @@
+# X3: comparison with existing systems on shared benchmarks.
+#   PaperQA2 (paper-qa, Skarlinski et al., 2024)  on LitQA2 + the WS3 QA bench (+ ScholarQABench single-paper tasks)
+#   OpenScholar (Asai et al., 2024)               on ScholarQABench single-paper tasks (SciFact, PubMedQA) + LitQA2
+#   Alexandria (WS3 arms A0 / R / S)              on the same items, same answer model where the system allows it
+# Our cluster: compute nodes offline, GPU slices <= 40 GB. OpenScholar's 45M-paper datastore (0.74 TB) is not used:
+# its 8B LM is fed Alexandria retrieval ("OpenScholar-8B LM + Alexandria retrieval") and, as an upper bound, the
+# benchmark's gold context. PaperQA2 runs on the WS3 corpus (the papers' full texts) with a local LLM.
+
+profiles:
+  debug: {x3_per_bench: 50}
+  full: {}
+
+x3:
+  items:
+    benchmarks: [litqa2, qabench-open, sqab-scifact, sqab-pubmed]
+    per_bench: null                       # full: every item; debug: 50 (same WS3 item ids for litqa2 / qabench-open)
+    seed: 0
+
+  answer_model: qwen2.5-7b                # PaperQA2's LLM and the Alexandria arms' model (shared, fair comparison)
+
+  alexandria:                             # WS3 harness (alexandria.ws3.agent) on the ScholarQABench items; LitQA2 /
+    arms: [A0, R, S]                      #   qabench-open results are reused from ws3/grade (same items, same model)
+    max_tool_calls: 6
+    max_retrieved_tokens: 8000
+    max_step_tokens: 400
+    temperature: 0.0
+    seeds: [0]
+    dense: true
+    encoder_device: cpu
+    gpu_memory_utilization: 0.88
+    arm_defs:
+      A0: {mode: direct}
+      R:  {mode: rag, kinds: [fulltext, summary], k: 20}
+      S:  {mode: agent, tools: [search, get_paper], view: summary}
+
+  paperqa:                                # paper-qa==2026.8.12 in the Alex-pqa venv (Alex-train + paper-qa)
+    python: ${site.store}/envs/Alex-pqa/bin/python
+    embedding: sentence-transformers/all-MiniLM-L6-v2   # local; used as hybrid dense + sparse ("hybrid-st-...")
+    embedding_revision: 1110a243fdf4706b3f48f1d95db1a4f5529b4d41
+    evidence_k: 10
+    answer_max_sources: 5
+    chunk_chars: 3000
+    max_papers: null                      # corpus = every WS3 index paper with full text
+    max_concurrent: 8
+    server_gpu_memory_utilization: 0.80
+    server_max_model_len: 14336
+    server_quantization: fp8
+
+  openscholar:
+    model: openscholar-8b                 # OpenScholar/Llama-3.1_OpenScholar-8B (Llama 3.1 licence)
+    top_k: 8                              # passages from Alexandria retrieval (fulltext + KU fields, hybrid)
+    max_context_tokens: 10000
+    max_tokens: 512
+    gpu_memory_utilization: 0.85
+
+  grade:
+    judge: qwen3-8b                       # SimpleQA judge for the QA bench (short answers); labels: exact match
+
+  results:
+    n_boot: 2000
